@@ -15,6 +15,10 @@ pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
 /// binds arguments, tears everything down. First entry in the cost table.
 const FUEL_CALL_COST: u64 = 10;
 
+/// I/O is expensive — the Leek Wars lesson: `debug()` in a loop is how
+/// leeks die. Charged on top of the call cost.
+const FUEL_PRINT_COST: u64 = 100;
+
 /// Maximum call depth. Fuel bounds *time*; this bounds *space* — recursion
 /// grows the host's stack, which would overflow long before 1M ops run out.
 const MAX_CALL_DEPTH: usize = 256;
@@ -193,18 +197,19 @@ impl Interpreter {
     fn call(&mut self, name: &str, args: &[Expr]) -> Result<Value> {
         self.fuel.tick(FUEL_CALL_COST)?;
 
-        let function = self
-            .functions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| LangError::UndefinedFunction(name.to_string()))?;
+        // User-defined functions are looked up first: shadowing a builtin
+        // is allowed, like shadowing a variable.
+        if let Some(function) = self.functions.get(name).cloned() {
+            return self.call_user(&function, args);
+        }
+
+        self.call_builtin(name, args)
+    }
+
+    fn call_user(&mut self, function: &Function, args: &[Expr]) -> Result<Value> {
 
         if args.len() != function.params.len() {
-            return Err(LangError::WrongArity {
-                function: name.to_string(),
-                expected: function.params.len(),
-                got: args.len(),
-            });
+            return Err(wrong_arity(&function.name, function.params.len(), args.len()));
         }
 
         // Arguments are evaluated in the caller's environment, before the switch.
@@ -241,7 +246,44 @@ impl Interpreter {
         match outcome? {
             Flow::Return(value) => Ok(value),
             // No null in the language: a call must produce a value.
-            Flow::Value(_) => Err(LangError::NoReturnValue { function: name.to_string() }),
+            Flow::Value(_) => Err(LangError::NoReturnValue { function: function.name.clone() }),
+        }
+    }
+
+    /// Native functions provided by the host. In the closed-world design
+    /// these are the only doors out of the sandbox, so each one is an
+    /// explicit, hand-carved case — deny by default.
+    fn call_builtin(&mut self, name: &str, args: &[Expr]) -> Result<Value> {
+
+        match name {
+            "print" => {
+                self.fuel.tick(FUEL_PRINT_COST)?;
+
+                let [arg] = args else {
+                    return Err(wrong_arity(name, 1, args.len()));
+                };
+
+                let value = self.eval(arg)?;
+                println!("{value}");
+                // No null: print passes its value through, so it can wrap
+                // any expression (like Rust's dbg!).
+                Ok(value)
+            }
+            "getOperations" => {
+                let [] = args else {
+                    return Err(wrong_arity(name, 0, args.len()));
+                };
+
+                Ok(Value::Number(self.fuel.used as f64))
+            }
+            "getOperationsLimit" => {
+                let [] = args else {
+                    return Err(wrong_arity(name, 0, args.len()));
+                };
+
+                Ok(Value::Number(self.fuel.limit as f64))
+            }
+            _ => Err(LangError::UndefinedFunction(name.to_string())),
         }
     }
 
@@ -330,6 +372,10 @@ impl Interpreter {
             other => Err(LangError::InvalidCondition { got: other.type_name() }),
         }
     }
+}
+
+fn wrong_arity(function: &str, expected: usize, got: usize) -> LangError {
+    LangError::WrongArity { function: function.to_string(), expected, got }
 }
 
 /// Ordering comparisons. `PartialOrd` on `Value` yields `None` for anything
