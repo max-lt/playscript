@@ -3,11 +3,37 @@ use std::collections::HashMap;
 
 use crate::ast::{BinaryOp, Expr, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
+use crate::lexer::tokenize;
+use crate::parser::Parser;
 use crate::value::Value;
+
+/// Default operation budget for one `run`.
+pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
+
+/// Deterministic operation budget. Every AST node visited costs fuel, so
+/// execution is finite by construction — `while (true) {}` included.
+/// The count doubles as a logical clock: "after N ops" is a reproducible
+/// instant, which is what a future replay/time-travel reader will seek on.
+struct Fuel {
+    used: u64,
+    limit: u64,
+}
+
+impl Fuel {
+    fn tick(&mut self, cost: u64) -> Result<()> {
+        self.used += cost;
+
+        if self.used > self.limit {
+            return Err(LangError::OutOfFuel { limit: self.limit });
+        }
+
+        Ok(())
+    }
+}
 
 /// The program's memory: a stack of lexical scopes, innermost last.
 /// The global scope sits at the bottom and never pops.
-pub struct Environment {
+struct Environment {
     scopes: Vec<HashMap<String, Value>>,
 }
 
@@ -28,7 +54,7 @@ impl Environment {
     }
 
     /// Read a variable, innermost scope first.
-    pub fn get(&self, name: &str) -> Result<Value> {
+    fn get(&self, name: &str) -> Result<Value> {
         self.scopes
             .iter()
             .rev()
@@ -38,7 +64,7 @@ impl Environment {
     }
 
     /// `var` — declare in the innermost scope. Shadowing an outer binding is allowed.
-    pub fn declare(&mut self, name: String, value: Value) {
+    fn declare(&mut self, name: String, value: Value) {
         self.scopes
             .last_mut()
             .expect("the global scope always exists")
@@ -47,7 +73,7 @@ impl Environment {
 
     /// `=` — update an existing binding, innermost scope first.
     /// Assigning to a name that was never declared is an error.
-    pub fn assign(&mut self, name: &str, value: Value) -> Result<()> {
+    fn assign(&mut self, name: &str, value: Value) -> Result<()> {
 
         for scope in self.scopes.iter_mut().rev() {
 
@@ -61,36 +87,135 @@ impl Environment {
     }
 }
 
-/// Evaluate an expression to a value (tree-walking, recursive like the AST).
-fn eval(expr: &Expr, env: &Environment) -> Result<Value> {
+/// The engine: owns the program's memory and the fuel meter.
+pub struct Interpreter {
+    env: Environment,
+    fuel: Fuel,
+}
 
-    match expr {
-        Expr::Literal(value) => Ok(*value),
-        Expr::Variable(name) => env.get(name),
-        Expr::Unary { op, operand } => {
-            let v = eval(operand, env)?;
+impl Interpreter {
+    pub fn new(fuel_limit: u64) -> Self {
+        Interpreter {
+            env: Environment::default(),
+            fuel: Fuel { used: 0, limit: fuel_limit },
+        }
+    }
 
-            // The `Neg`/`Not` impls on `Value` do the type checking.
-            match op {
-                UnaryOp::Neg => -v,
-                UnaryOp::Not => !v,
+    /// Parse and execute a whole program; return the last expression's value.
+    /// The environment persists across calls (that is what makes the REPL
+    /// stateful); the fuel budget resets on every call.
+    pub fn run(&mut self, src: &str) -> Result<Option<Value>> {
+        let tokens = tokenize(src)?;
+        let program = Parser::new(tokens).parse_program()?;
+
+        self.fuel.used = 0;
+
+        let mut last = None;
+
+        for stmt in &program {
+            last = self.exec(stmt)?;
+        }
+
+        Ok(last)
+    }
+
+    /// Operations consumed by the last `run`.
+    pub fn fuel_used(&self) -> u64 {
+        self.fuel.used
+    }
+
+    fn eval(&mut self, expr: &Expr) -> Result<Value> {
+        // Every node visited costs one operation. Charging here, at the top,
+        // means no expression — however deeply nested — escapes metering.
+        self.fuel.tick(1)?;
+
+        match expr {
+            Expr::Literal(value) => Ok(*value),
+            Expr::Variable(name) => self.env.get(name),
+            Expr::Unary { op, operand } => {
+                let v = self.eval(operand)?;
+
+                // The `Neg`/`Not` impls on `Value` do the type checking.
+                match op {
+                    UnaryOp::Neg => -v,
+                    UnaryOp::Not => !v,
+                }
+            }
+            Expr::Binary { op, left, right } => {
+                let l = self.eval(left)?;
+                let r = self.eval(right)?;
+
+                match op {
+                    // The `std::ops` impls on `Value`: each returns a `Result`.
+                    BinaryOp::Add => l + r,
+                    BinaryOp::Sub => l - r,
+                    BinaryOp::Mul => l * r,
+                    BinaryOp::Div => l / r,
+                    // Equality is total: values of different types are not equal.
+                    BinaryOp::Eq => Ok(Value::Bool(l == r)),
+                    BinaryOp::Ne => Ok(Value::Bool(l != r)),
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                        ordered(*op, l, r)
+                    }
+                }
             }
         }
-        Expr::Binary { op, left, right } => {
-            let l = eval(left, env)?;
-            let r = eval(right, env)?;
+    }
 
-            match op {
-                // The `std::ops` impls on `Value`: each returns a `Result`.
-                BinaryOp::Add => l + r,
-                BinaryOp::Sub => l - r,
-                BinaryOp::Mul => l * r,
-                BinaryOp::Div => l / r,
-                // Equality is total: values of different types are not equal.
-                BinaryOp::Eq => Ok(Value::Bool(l == r)),
-                BinaryOp::Ne => Ok(Value::Bool(l != r)),
-                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => ordered(*op, l, r),
+    fn exec(&mut self, stmt: &Stmt) -> Result<Option<Value>> {
+        self.fuel.tick(1)?;
+
+        match stmt {
+            Stmt::Let { name, value } => {
+                let v = self.eval(value)?;
+                self.env.declare(name.clone(), v);
+                Ok(None)
             }
+            Stmt::Assign { name, value } => {
+                let v = self.eval(value)?;
+                self.env.assign(name, v)?;
+                Ok(None)
+            }
+            Stmt::Block(stmts) => {
+                self.env.push_scope();
+                // Pop the scope even when a statement fails, so a REPL session
+                // is not left inside a half-executed block.
+                let result = stmts.iter().try_for_each(|stmt| self.exec(stmt).map(|_| ()));
+                self.env.pop_scope();
+                result?;
+                Ok(None)
+            }
+            Stmt::If { condition, then_branch, else_branch } => {
+
+                if self.eval_condition(condition)? {
+                    self.exec(then_branch)?;
+                } else if let Some(else_branch) = else_branch {
+                    self.exec(else_branch)?;
+                }
+
+                Ok(None)
+            }
+            Stmt::While { condition, body } => {
+
+                // The condition is re-evaluated (and re-charged) on every
+                // iteration, so even an empty loop burns fuel — that is the
+                // whole safety argument.
+                while self.eval_condition(condition)? {
+                    self.exec(body)?;
+                }
+
+                Ok(None)
+            }
+            Stmt::Expr(expr) => Ok(Some(self.eval(expr)?)),
+        }
+    }
+
+    /// Conditions are strict: anything but a bool is a type error.
+    fn eval_condition(&mut self, condition: &Expr) -> Result<bool> {
+
+        match self.eval(condition)? {
+            Value::Bool(flag) => Ok(flag),
+            other => Err(LangError::InvalidCondition { got: other.type_name() }),
         }
     }
 }
@@ -115,46 +240,4 @@ fn ordered(op: BinaryOp, l: Value, r: Value) -> Result<Value> {
     };
 
     Ok(Value::Bool(result))
-}
-
-/// Execute a statement. A `var` binding yields nothing; an expression yields its value.
-pub fn exec(stmt: &Stmt, env: &mut Environment) -> Result<Option<Value>> {
-
-    match stmt {
-        Stmt::Let { name, value } => {
-            let v = eval(value, env)?;
-            env.declare(name.clone(), v);
-            Ok(None)
-        }
-        Stmt::Assign { name, value } => {
-            let v = eval(value, env)?;
-            env.assign(name, v)?;
-            Ok(None)
-        }
-        Stmt::Block(stmts) => {
-            env.push_scope();
-            // Pop the scope even when a statement fails, so a REPL session
-            // is not left inside a half-executed block.
-            let result = stmts.iter().try_for_each(|stmt| exec(stmt, env).map(|_| ()));
-            env.pop_scope();
-            result?;
-            Ok(None)
-        }
-        Stmt::If { condition, then_branch, else_branch } => {
-            let cond = eval(condition, env)?;
-
-            let Value::Bool(flag) = cond else {
-                return Err(LangError::InvalidCondition { got: cond.type_name() });
-            };
-
-            if flag {
-                exec(then_branch, env)?;
-            } else if let Some(else_branch) = else_branch {
-                exec(else_branch, env)?;
-            }
-
-            Ok(None)
-        }
-        Stmt::Expr(expr) => Ok(Some(eval(expr, env)?)),
-    }
 }

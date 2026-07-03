@@ -61,5 +61,7 @@ pub enum Stmt {
     Block(Vec<Stmt>),
     /// Branches are always blocks (or another `If` for `else if`).
     If { condition: Expr, then_branch: Box<Stmt>, else_branch: Option<Box<Stmt>> },
+    /// `while (cond) { ... }` — the body is always a block.
+    While { condition: Expr, body: Box<Stmt> },
     Expr(Expr),
 }

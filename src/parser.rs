@@ -8,6 +8,7 @@ use crate::value::Value;
 //   statement  := "var" IDENT "=" expr
 //                | IDENT "=" expr
 //                | "if" "(" expr ")" block ("else" (block | if))?
+//                | "while" "(" expr ")" block
 //                | block
 //                | expr
 //   block      := "{" statement* "}"
@@ -48,6 +49,15 @@ impl Parser {
         tok
     }
 
+    /// Consume the next token if it is exactly `want`, error otherwise.
+    fn expect(&mut self, want: Token, what: &'static str) -> Result<()> {
+
+        match self.advance() {
+            Some(tok) if tok == want => Ok(()),
+            other => Err(expected(what, other)),
+        }
+    }
+
     pub fn parse_program(&mut self) -> Result<Vec<Stmt>> {
         let mut stmts = Vec::new();
 
@@ -68,6 +78,7 @@ impl Parser {
         match self.peek() {
             Some(Token::Var) => self.let_statement(),
             Some(Token::If) => self.if_statement(),
+            Some(Token::While) => self.while_statement(),
             Some(Token::LBrace) => self.block(),
             // Two-token lookahead: `x = ...` is an assignment, a lone `x` is
             // an expression.
@@ -86,10 +97,7 @@ impl Parser {
             other => return Err(expected("a variable name", other)),
         };
 
-        match self.advance() {
-            Some(Token::Equals) => {}
-            other => return Err(expected("'='", other)),
-        }
+        self.expect(Token::Equals, "'='")?;
 
         let value = self.expr()?;
         Ok(Stmt::Let { name, value })
@@ -139,17 +147,9 @@ impl Parser {
     fn if_statement(&mut self) -> Result<Stmt> {
         self.advance(); // consume 'if'
 
-        match self.advance() {
-            Some(Token::LParen) => {}
-            other => return Err(expected("'('", other)),
-        }
-
+        self.expect(Token::LParen, "'('")?;
         let condition = self.expr()?;
-
-        match self.advance() {
-            Some(Token::RParen) => {}
-            other => return Err(expected("')'", other)),
-        }
+        self.expect(Token::RParen, "')'")?;
 
         let then_branch = match self.peek() {
             Some(Token::LBrace) => Box::new(self.block()?),
@@ -169,6 +169,21 @@ impl Parser {
         };
 
         Ok(Stmt::If { condition, then_branch, else_branch })
+    }
+
+    fn while_statement(&mut self) -> Result<Stmt> {
+        self.advance(); // consume 'while'
+
+        self.expect(Token::LParen, "'('")?;
+        let condition = self.expr()?;
+        self.expect(Token::RParen, "')'")?;
+
+        let body = match self.peek() {
+            Some(Token::LBrace) => Box::new(self.block()?),
+            _ => return Err(expected("'{'", self.advance())),
+        };
+
+        Ok(Stmt::While { condition, body })
     }
 
     fn expr(&mut self) -> Result<Expr> {

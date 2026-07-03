@@ -7,33 +7,17 @@ mod value;
 
 use std::io::{self, Write};
 
-use crate::error::Result;
-use crate::interp::{Environment, exec};
-use crate::lexer::tokenize;
-use crate::parser::Parser;
-use crate::value::Value;
-
-/// Run a whole program against `env`; return the value of the last expression.
-fn run(src: &str, env: &mut Environment) -> Result<Option<Value>> {
-    let tokens = tokenize(src)?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program()?;
-
-    let mut last = None;
-
-    for stmt in &program {
-        last = exec(stmt, env)?;
-    }
-
-    Ok(last)
-}
+use crate::interp::{DEFAULT_FUEL_LIMIT, Interpreter};
 
 fn repl() {
     let stdin = io::stdin();
     let mut line = String::new();
-    let mut env = Environment::default(); // persists across lines
+    let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT); // env persists across lines
 
-    println!("playscript v{} — Ctrl+D to quit.", env!("CARGO_PKG_VERSION"));
+    println!(
+        "playscript v{} — fuel: {DEFAULT_FUEL_LIMIT} ops per line. Ctrl+D to quit.",
+        env!("CARGO_PKG_VERSION")
+    );
 
     loop {
         print!("> ");
@@ -50,9 +34,9 @@ fn repl() {
                     continue;
                 }
 
-                match run(trimmed, &mut env) {
-                    Ok(Some(value)) => println!("{value}"),
-                    Ok(None) => {} // e.g. `var x = 5` — nothing to print
+                match interp.run(trimmed) {
+                    Ok(Some(value)) => println!("{value}  [{} ops]", interp.fuel_used()),
+                    Ok(None) => println!("[{} ops]", interp.fuel_used()),
                     Err(e) => eprintln!("error: {e}"),
                 }
             }
@@ -71,9 +55,9 @@ fn main() {
 
     if !args.is_empty() {
         let src = args.join(" ");
-        let mut env = Environment::default();
+        let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT);
 
-        match run(&src, &mut env) {
+        match interp.run(&src) {
             Ok(Some(value)) => println!("{value}"),
             Ok(None) => {}
             Err(e) => {

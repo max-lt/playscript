@@ -13,6 +13,7 @@ pub enum Token {
     False,
     If,
     Else,
+    While,
     // Operators and punctuation
     Equals,
     Plus,
@@ -45,6 +46,7 @@ impl fmt::Display for Token {
             Token::False => write!(f, "false"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
+            Token::While => write!(f, "while"),
             Token::Equals => write!(f, "="),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
@@ -193,6 +195,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                     "false" => Token::False,
                     "if" => Token::If,
                     "else" => Token::Else,
+                    "while" => Token::While,
                     _ => Token::Ident(ident),
                 };
 

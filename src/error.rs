@@ -12,6 +12,7 @@ pub enum LangError {
     InvalidBinaryOp { op: &'static str, lhs: &'static str, rhs: &'static str },
     InvalidUnaryOp { op: &'static str, operand: &'static str },
     InvalidCondition { got: &'static str },
+    OutOfFuel { limit: u64 },
 }
 
 /// Crate-wide result alias: `Result<T>` == `Result<T, LangError>`.
@@ -39,6 +40,9 @@ impl fmt::Display for LangError {
             }
             LangError::InvalidCondition { got } => {
                 write!(f, "condition must be a bool, got {got}")
+            }
+            LangError::OutOfFuel { limit } => {
+                write!(f, "operation limit exceeded ({limit} ops)")
             }
         }
     }
