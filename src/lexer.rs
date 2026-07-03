@@ -14,6 +14,8 @@ pub enum Token {
     If,
     Else,
     While,
+    Function,
+    Return,
     // Operators and punctuation
     Equals,
     Plus,
@@ -32,6 +34,7 @@ pub enum Token {
     LBrace,
     RBrace,
     Semicolon,
+    Comma,
 }
 
 // Used to build readable error messages, e.g. "expected '=', found '+'".
@@ -47,6 +50,8 @@ impl fmt::Display for Token {
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
             Token::While => write!(f, "while"),
+            Token::Function => write!(f, "function"),
+            Token::Return => write!(f, "return"),
             Token::Equals => write!(f, "="),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
@@ -64,6 +69,7 @@ impl fmt::Display for Token {
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
             Token::Semicolon => write!(f, ";"),
+            Token::Comma => write!(f, ","),
         }
     }
 }
@@ -114,6 +120,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             ';' => {
                 chars.next();
                 tokens.push(Token::Semicolon);
+            }
+            ',' => {
+                chars.next();
+                tokens.push(Token::Comma);
             }
             // One- or two-character operators: the second char decides.
             '=' => {
@@ -196,6 +206,8 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                     "if" => Token::If,
                     "else" => Token::Else,
                     "while" => Token::While,
+                    "function" => Token::Function,
+                    "return" => Token::Return,
                     _ => Token::Ident(ident),
                 };
 

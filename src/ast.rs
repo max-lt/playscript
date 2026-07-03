@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::value::Value;
 
 /// Unary operators.
@@ -46,6 +48,8 @@ impl BinaryOp {
 pub enum Expr {
     Literal(Value),
     Variable(String),
+    /// `f(a, b)` — functions are not values (yet), the callee is a name.
+    Call { name: String, args: Vec<Expr> },
     Unary { op: UnaryOp, operand: Box<Expr> },
     Binary { op: BinaryOp, left: Box<Expr>, right: Box<Expr> },
 }
@@ -63,5 +67,18 @@ pub enum Stmt {
     If { condition: Expr, then_branch: Box<Stmt>, else_branch: Option<Box<Stmt>> },
     /// `while (cond) { ... }` — the body is always a block.
     While { condition: Expr, body: Box<Stmt> },
+    /// `function name(params) { ... }` — registers the function.
+    /// `Rc` so the definition can outlive the AST it was parsed from.
+    Function(Rc<Function>),
+    /// `return expr` — unwinds to the nearest enclosing call.
+    Return(Expr),
     Expr(Expr),
+}
+
+/// A user-defined function. The body is always a block.
+#[derive(Debug)]
+pub struct Function {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Stmt,
 }

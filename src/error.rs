@@ -13,6 +13,11 @@ pub enum LangError {
     InvalidUnaryOp { op: &'static str, operand: &'static str },
     InvalidCondition { got: &'static str },
     OutOfFuel { limit: u64 },
+    UndefinedFunction(String),
+    WrongArity { function: String, expected: usize, got: usize },
+    NoReturnValue { function: String },
+    ReturnOutsideFunction,
+    CallDepthExceeded { limit: usize },
 }
 
 /// Crate-wide result alias: `Result<T>` == `Result<T, LangError>`.
@@ -43,6 +48,17 @@ impl fmt::Display for LangError {
             }
             LangError::OutOfFuel { limit } => {
                 write!(f, "operation limit exceeded ({limit} ops)")
+            }
+            LangError::UndefinedFunction(name) => write!(f, "undefined function: {name}"),
+            LangError::WrongArity { function, expected, got } => {
+                write!(f, "function '{function}' takes {expected} argument(s), got {got}")
+            }
+            LangError::NoReturnValue { function } => {
+                write!(f, "function '{function}' ended without returning a value")
+            }
+            LangError::ReturnOutsideFunction => write!(f, "'return' outside of a function"),
+            LangError::CallDepthExceeded { limit } => {
+                write!(f, "call depth limit exceeded ({limit})")
             }
         }
     }

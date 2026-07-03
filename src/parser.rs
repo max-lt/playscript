@@ -1,4 +1,6 @@
-use crate::ast::{BinaryOp, Expr, Stmt, UnaryOp};
+use std::rc::Rc;
+
+use crate::ast::{BinaryOp, Expr, Function, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
 use crate::lexer::Token;
 use crate::value::Value;
@@ -7,6 +9,8 @@ use crate::value::Value;
 //   program    := statement*
 //   statement  := "var" IDENT "=" expr
 //                | IDENT "=" expr
+//                | "function" IDENT "(" (IDENT ("," IDENT)*)? ")" block
+//                | "return" expr
 //                | "if" "(" expr ")" block ("else" (block | if))?
 //                | "while" "(" expr ")" block
 //                | block
@@ -18,7 +22,8 @@ use crate::value::Value;
 //   term       := factor (("+" | "-") factor)*
 //   factor     := unary (("*" | "/") unary)*
 //   unary      := ("-" | "!") unary | primary
-//   primary    := NUMBER | "true" | "false" | IDENT | "(" expr ")"
+//   primary    := NUMBER | "true" | "false" | IDENT ("(" args ")")? | "(" expr ")"
+//   args       := (expr ("," expr)*)?
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -77,6 +82,8 @@ impl Parser {
 
         match self.peek() {
             Some(Token::Var) => self.let_statement(),
+            Some(Token::Function) => self.function_statement(),
+            Some(Token::Return) => self.return_statement(),
             Some(Token::If) => self.if_statement(),
             Some(Token::While) => self.while_statement(),
             Some(Token::LBrace) => self.block(),
@@ -186,6 +193,54 @@ impl Parser {
         Ok(Stmt::While { condition, body })
     }
 
+    fn function_statement(&mut self) -> Result<Stmt> {
+        self.advance(); // consume 'function'
+
+        let name = match self.advance() {
+            Some(Token::Ident(name)) => name,
+            other => return Err(expected("a function name", other)),
+        };
+
+        self.expect(Token::LParen, "'('")?;
+
+        let mut params = Vec::new();
+
+        if !matches!(self.peek(), Some(Token::RParen)) {
+
+            loop {
+
+                match self.advance() {
+                    Some(Token::Ident(param)) => params.push(param),
+                    other => return Err(expected("a parameter name", other)),
+                }
+
+                match self.peek() {
+                    Some(Token::Comma) => {
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        self.expect(Token::RParen, "')'")?;
+
+        let body = match self.peek() {
+            Some(Token::LBrace) => self.block()?,
+            _ => return Err(expected("'{'", self.advance())),
+        };
+
+        Ok(Stmt::Function(Rc::new(Function { name, params, body })))
+    }
+
+    fn return_statement(&mut self) -> Result<Stmt> {
+        self.advance(); // consume 'return'
+
+        // No null in the language: `return` always carries a value.
+        let value = self.expr()?;
+        Ok(Stmt::Return(value))
+    }
+
     fn expr(&mut self) -> Result<Expr> {
         self.equality()
     }
@@ -277,7 +332,17 @@ impl Parser {
             Some(Token::Number(n)) => Ok(Expr::Literal(Value::Number(n))),
             Some(Token::True) => Ok(Expr::Literal(Value::Bool(true))),
             Some(Token::False) => Ok(Expr::Literal(Value::Bool(false))),
-            Some(Token::Ident(name)) => Ok(Expr::Variable(name)),
+            Some(Token::Ident(name)) => {
+
+                // A name followed by '(' is a call, otherwise a variable.
+                if matches!(self.peek(), Some(Token::LParen)) {
+                    self.advance(); // consume '('
+                    let args = self.arguments()?;
+                    return Ok(Expr::Call { name, args });
+                }
+
+                Ok(Expr::Variable(name))
+            }
             Some(Token::LParen) => {
                 let inner = self.expr()?;
 
@@ -288,5 +353,27 @@ impl Parser {
             }
             other => Err(expected("a literal, a variable or '('", other)),
         }
+    }
+
+    /// Comma-separated argument list; the opening '(' is already consumed.
+    fn arguments(&mut self) -> Result<Vec<Expr>> {
+        let mut args = Vec::new();
+
+        if !matches!(self.peek(), Some(Token::RParen)) {
+
+            loop {
+                args.push(self.expr()?);
+
+                match self.peek() {
+                    Some(Token::Comma) => {
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        self.expect(Token::RParen, "')'")?;
+        Ok(args)
     }
 }

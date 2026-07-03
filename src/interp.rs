@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use crate::ast::{BinaryOp, Expr, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Function, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
 use crate::lexer::tokenize;
 use crate::parser::Parser;
@@ -9,6 +10,14 @@ use crate::value::Value;
 
 /// Default operation budget for one `run`.
 pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
+
+/// Entering a function costs more than a plain node: a call sets up a scope,
+/// binds arguments, tears everything down. First entry in the cost table.
+const FUEL_CALL_COST: u64 = 10;
+
+/// Maximum call depth. Fuel bounds *time*; this bounds *space* — recursion
+/// grows the host's stack, which would overflow long before 1M ops run out.
+const MAX_CALL_DEPTH: usize = 256;
 
 /// Deterministic operation budget. Every AST node visited costs fuel, so
 /// execution is finite by construction — `while (true) {}` included.
@@ -87,10 +96,21 @@ impl Environment {
     }
 }
 
-/// The engine: owns the program's memory and the fuel meter.
+/// How a statement finished: fell through normally (carrying the value of an
+/// expression statement, for the REPL), or hit `return` and is unwinding
+/// through blocks and loops towards the nearest enclosing call.
+enum Flow {
+    Value(Option<Value>),
+    Return(Value),
+}
+
+/// The engine: owns the program's memory, the fuel meter and the
+/// function registry.
 pub struct Interpreter {
     env: Environment,
     fuel: Fuel,
+    functions: HashMap<String, Rc<Function>>,
+    depth: usize,
 }
 
 impl Interpreter {
@@ -98,22 +118,29 @@ impl Interpreter {
         Interpreter {
             env: Environment::default(),
             fuel: Fuel { used: 0, limit: fuel_limit },
+            functions: HashMap::new(),
+            depth: 0,
         }
     }
 
     /// Parse and execute a whole program; return the last expression's value.
-    /// The environment persists across calls (that is what makes the REPL
-    /// stateful); the fuel budget resets on every call.
+    /// The environment and function registry persist across calls (that is
+    /// what makes the REPL stateful); the fuel budget resets on every call.
     pub fn run(&mut self, src: &str) -> Result<Option<Value>> {
         let tokens = tokenize(src)?;
         let program = Parser::new(tokens).parse_program()?;
 
         self.fuel.used = 0;
+        self.depth = 0;
 
         let mut last = None;
 
         for stmt in &program {
-            last = self.exec(stmt)?;
+
+            match self.exec(stmt)? {
+                Flow::Value(value) => last = value,
+                Flow::Return(_) => return Err(LangError::ReturnOutsideFunction),
+            }
         }
 
         Ok(last)
@@ -132,6 +159,7 @@ impl Interpreter {
         match expr {
             Expr::Literal(value) => Ok(*value),
             Expr::Variable(name) => self.env.get(name),
+            Expr::Call { name, args } => self.call(name, args),
             Expr::Unary { op, operand } => {
                 let v = self.eval(operand)?;
 
@@ -162,38 +190,119 @@ impl Interpreter {
         }
     }
 
-    fn exec(&mut self, stmt: &Stmt) -> Result<Option<Value>> {
+    fn call(&mut self, name: &str, args: &[Expr]) -> Result<Value> {
+        self.fuel.tick(FUEL_CALL_COST)?;
+
+        let function = self
+            .functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| LangError::UndefinedFunction(name.to_string()))?;
+
+        if args.len() != function.params.len() {
+            return Err(LangError::WrongArity {
+                function: name.to_string(),
+                expected: function.params.len(),
+                got: args.len(),
+            });
+        }
+
+        // Arguments are evaluated in the caller's environment, before the switch.
+        let mut values = Vec::with_capacity(args.len());
+
+        for arg in args {
+            values.push(self.eval(arg)?);
+        }
+
+        self.depth += 1;
+
+        if self.depth > MAX_CALL_DEPTH {
+            self.depth -= 1;
+            return Err(LangError::CallDepthExceeded { limit: MAX_CALL_DEPTH });
+        }
+
+        // Lexical scoping: the body sees the globals and its own scope only.
+        // The caller's locals are set aside for the duration of the call —
+        // leaving them visible would be dynamic scoping, the classic
+        // tree-walker trap.
+        let caller_locals = self.env.scopes.split_off(1);
+        self.env.push_scope();
+
+        for (param, value) in function.params.iter().zip(values) {
+            self.env.declare(param.clone(), value);
+        }
+
+        let outcome = self.exec(&function.body);
+
+        self.env.scopes.truncate(1);
+        self.env.scopes.extend(caller_locals);
+        self.depth -= 1;
+
+        match outcome? {
+            Flow::Return(value) => Ok(value),
+            // No null in the language: a call must produce a value.
+            Flow::Value(_) => Err(LangError::NoReturnValue { function: name.to_string() }),
+        }
+    }
+
+    fn exec(&mut self, stmt: &Stmt) -> Result<Flow> {
         self.fuel.tick(1)?;
 
         match stmt {
             Stmt::Let { name, value } => {
                 let v = self.eval(value)?;
                 self.env.declare(name.clone(), v);
-                Ok(None)
+                Ok(Flow::Value(None))
             }
             Stmt::Assign { name, value } => {
                 let v = self.eval(value)?;
                 self.env.assign(name, v)?;
-                Ok(None)
+                Ok(Flow::Value(None))
+            }
+            Stmt::Function(function) => {
+                // Registration only; redefining is allowed (REPL-friendly).
+                self.functions.insert(function.name.clone(), Rc::clone(function));
+                Ok(Flow::Value(None))
+            }
+            Stmt::Return(expr) => {
+                let value = self.eval(expr)?;
+                Ok(Flow::Return(value))
             }
             Stmt::Block(stmts) => {
                 self.env.push_scope();
-                // Pop the scope even when a statement fails, so a REPL session
-                // is not left inside a half-executed block.
-                let result = stmts.iter().try_for_each(|stmt| self.exec(stmt).map(|_| ()));
+
+                let mut flow = Flow::Value(None);
+
+                for stmt in stmts {
+
+                    match self.exec(stmt) {
+                        // A `return` stops the block and keeps unwinding.
+                        Ok(Flow::Return(value)) => {
+                            flow = Flow::Return(value);
+                            break;
+                        }
+                        Ok(Flow::Value(_)) => {}
+                        Err(e) => {
+                            // Pop even on failure, so a REPL session is not
+                            // left inside a half-executed block.
+                            self.env.pop_scope();
+                            return Err(e);
+                        }
+                    }
+                }
+
                 self.env.pop_scope();
-                result?;
-                Ok(None)
+                Ok(flow)
             }
             Stmt::If { condition, then_branch, else_branch } => {
 
                 if self.eval_condition(condition)? {
-                    self.exec(then_branch)?;
+                    self.exec(then_branch)
                 } else if let Some(else_branch) = else_branch {
-                    self.exec(else_branch)?;
+                    self.exec(else_branch)
+                } else {
+                    Ok(Flow::Value(None))
                 }
-
-                Ok(None)
             }
             Stmt::While { condition, body } => {
 
@@ -201,12 +310,15 @@ impl Interpreter {
                 // iteration, so even an empty loop burns fuel — that is the
                 // whole safety argument.
                 while self.eval_condition(condition)? {
-                    self.exec(body)?;
+
+                    if let Flow::Return(value) = self.exec(body)? {
+                        return Ok(Flow::Return(value));
+                    }
                 }
 
-                Ok(None)
+                Ok(Flow::Value(None))
             }
-            Stmt::Expr(expr) => Ok(Some(self.eval(expr)?)),
+            Stmt::Expr(expr) => Ok(Flow::Value(Some(self.eval(expr)?))),
         }
     }
 
