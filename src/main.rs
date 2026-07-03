@@ -3,6 +3,7 @@ mod error;
 mod interp;
 mod lexer;
 mod parser;
+mod value;
 
 use std::io::{self, Write};
 
@@ -10,9 +11,10 @@ use crate::error::Result;
 use crate::interp::{Environment, exec};
 use crate::lexer::tokenize;
 use crate::parser::Parser;
+use crate::value::Value;
 
 /// Run a whole program against `env`; return the value of the last expression.
-fn run(src: &str, env: &mut Environment) -> Result<Option<f64>> {
+fn run(src: &str, env: &mut Environment) -> Result<Option<Value>> {
     let tokens = tokenize(src)?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;

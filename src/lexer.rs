@@ -7,14 +7,29 @@ use crate::error::{LangError, Result};
 pub enum Token {
     Number(f64),
     Ident(String),
-    Var, // keyword
+    // Keywords
+    Var,
+    True,
+    False,
+    If,
+    Else,
+    // Operators and punctuation
     Equals,
     Plus,
     Minus,
     Star,
     Slash,
+    Bang,
+    EqualEqual,
+    BangEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Semicolon,
 }
 
@@ -26,13 +41,26 @@ impl fmt::Display for Token {
             Token::Number(n) => write!(f, "{n}"),
             Token::Ident(name) => write!(f, "{name}"),
             Token::Var => write!(f, "var"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::If => write!(f, "if"),
+            Token::Else => write!(f, "else"),
             Token::Equals => write!(f, "="),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
+            Token::Bang => write!(f, "!"),
+            Token::EqualEqual => write!(f, "=="),
+            Token::BangEqual => write!(f, "!="),
+            Token::Less => write!(f, "<"),
+            Token::LessEqual => write!(f, "<="),
+            Token::Greater => write!(f, ">"),
+            Token::GreaterEqual => write!(f, ">="),
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
+            Token::LBrace => write!(f, "{{"),
+            Token::RBrace => write!(f, "}}"),
             Token::Semicolon => write!(f, ";"),
         }
     }
@@ -73,13 +101,58 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                 chars.next();
                 tokens.push(Token::RParen);
             }
-            '=' => {
+            '{' => {
                 chars.next();
-                tokens.push(Token::Equals);
+                tokens.push(Token::LBrace);
+            }
+            '}' => {
+                chars.next();
+                tokens.push(Token::RBrace);
             }
             ';' => {
                 chars.next();
                 tokens.push(Token::Semicolon);
+            }
+            // One- or two-character operators: the second char decides.
+            '=' => {
+                chars.next();
+
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(Token::EqualEqual);
+                } else {
+                    tokens.push(Token::Equals);
+                }
+            }
+            '!' => {
+                chars.next();
+
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(Token::BangEqual);
+                } else {
+                    tokens.push(Token::Bang);
+                }
+            }
+            '<' => {
+                chars.next();
+
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(Token::LessEqual);
+                } else {
+                    tokens.push(Token::Less);
+                }
+            }
+            '>' => {
+                chars.next();
+
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(Token::GreaterEqual);
+                } else {
+                    tokens.push(Token::Greater);
+                }
             }
             '0'..='9' | '.' => {
                 let mut num = String::new();
@@ -116,6 +189,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                 // Reserved keyword, or plain identifier?
                 let token = match ident.as_str() {
                     "var" => Token::Var,
+                    "true" => Token::True,
+                    "false" => Token::False,
+                    "if" => Token::If,
+                    "else" => Token::Else,
                     _ => Token::Ident(ident),
                 };
 

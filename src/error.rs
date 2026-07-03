@@ -9,6 +9,9 @@ pub enum LangError {
     UnexpectedEnd { expected: &'static str },
     UndefinedVariable(String),
     DivisionByZero,
+    InvalidBinaryOp { op: &'static str, lhs: &'static str, rhs: &'static str },
+    InvalidUnaryOp { op: &'static str, operand: &'static str },
+    InvalidCondition { got: &'static str },
 }
 
 /// Crate-wide result alias: `Result<T>` == `Result<T, LangError>`.
@@ -28,6 +31,15 @@ impl fmt::Display for LangError {
             }
             LangError::UndefinedVariable(name) => write!(f, "undefined variable: {name}"),
             LangError::DivisionByZero => write!(f, "division by zero"),
+            LangError::InvalidBinaryOp { op, lhs, rhs } => {
+                write!(f, "invalid operands to '{op}': {lhs} and {rhs}")
+            }
+            LangError::InvalidUnaryOp { op, operand } => {
+                write!(f, "invalid operand to '{op}': {operand}")
+            }
+            LangError::InvalidCondition { got } => {
+                write!(f, "condition must be a bool, got {got}")
+            }
         }
     }
 }
