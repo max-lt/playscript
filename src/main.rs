@@ -1,13 +1,6 @@
-mod ast;
-mod error;
-mod interp;
-mod lexer;
-mod parser;
-mod value;
-
 use std::io::{self, Write};
 
-use crate::interp::{DEFAULT_FUEL_LIMIT, Interpreter};
+use playscript::{DEFAULT_FUEL_LIMIT, Interpreter};
 
 fn repl() {
     let stdin = io::stdin();
