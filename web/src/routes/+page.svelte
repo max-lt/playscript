@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { load, runProgram, type JsonValue, type RunResult, type TraceEvent } from '$lib/engine';
 
 	const EXAMPLES: Record<string, string> = {
@@ -47,6 +47,19 @@
 			e.preventDefault();
 			run();
 		}
+	}
+
+	// Up/Down step through the trace, but only while a trace row has focus (so
+	// they don't fight the editor). Focus follows the new current row.
+	function onWindowKey(e: KeyboardEvent) {
+		if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+		if (!traceEl?.contains(document.activeElement)) return;
+
+		e.preventDefault();
+		step = e.key === 'ArrowDown' ? Math.min(events.length, step + 1) : Math.max(1, step - 1);
+
+		tick().then(() => (traceEl?.querySelector('[data-current]') as HTMLElement | null)?.focus());
 	}
 
 	// Keep the current trace event in view as the scrubber moves.
@@ -104,6 +117,8 @@
 		assign: 'text-slate-400'
 	};
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="flex h-screen flex-col bg-slate-950 text-slate-200">
 	<header class="flex items-baseline gap-3 border-b border-slate-800 px-5 py-3">
