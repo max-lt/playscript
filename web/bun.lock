@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "web",
+      "dependencies": {
+        "playscript-wasm": "file:../wasm/pkg",
+      },
       "devDependencies": {
         "@sveltejs/adapter-cloudflare": "^7.2.9",
         "@sveltejs/kit": "^2.63.0",
@@ -346,6 +349,8 @@
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
     "picomatch": ["picomatch@4.0.5", "", {}, "sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A=="],
+
+    "playscript-wasm": ["playscript-wasm@file:../wasm/pkg", {}],
 
     "postcss": ["postcss@8.5.16", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg=="],
 

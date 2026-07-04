@@ -15,6 +15,9 @@
 		"deploy": "vite build && wrangler deploy",
 		"cf-typegen": "wrangler types"
 	},
+	"dependencies": {
+		"playscript-wasm": "file:../wasm/pkg"
+	},
 	"devDependencies": {
 		"@sveltejs/adapter-cloudflare": "^7.2.9",
 		"@sveltejs/kit": "^2.63.0",
