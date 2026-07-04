@@ -1,1 +1,4 @@
 /target
+
+# wasm-pack build output (generated; rebuild with `wasm-pack build wasm`)
+/wasm/pkg
