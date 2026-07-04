@@ -1,15 +1,18 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Not, Sub};
+use std::rc::Rc;
 
 use crate::error::{LangError, Result};
 
 /// A runtime value — the dynamic type of the language.
-/// Everything is `Copy` for now; that ends the day we add strings or arrays.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Numbers and bools are plain; strings are immutable and reference-counted,
+/// so cloning any `Value` stays cheap (at most a refcount bump).
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(f64),
     Bool(bool),
+    Str(Rc<str>),
 }
 
 impl Value {
@@ -19,6 +22,7 @@ impl Value {
         match self {
             Value::Number(_) => "number",
             Value::Bool(_) => "bool",
+            Value::Str(_) => "string",
         }
     }
 }
@@ -29,6 +33,7 @@ impl fmt::Display for Value {
         match self {
             Value::Number(n) => write!(f, "{n}"),
             Value::Bool(b) => write!(f, "{b}"),
+            Value::Str(s) => write!(f, "{s}"),
         }
     }
 }
@@ -48,6 +53,14 @@ impl Add for Value {
 
         match (self, rhs) {
             (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
+            // `+` concatenates two strings — and only two strings; mixing
+            // types requires an explicit str() conversion.
+            (Value::Str(l), Value::Str(r)) => {
+                let mut s = String::with_capacity(l.len() + r.len());
+                s.push_str(&l);
+                s.push_str(&r);
+                Ok(Value::Str(s.into()))
+            }
             (l, r) => Err(invalid_binary("+", l, r)),
         }
     }
@@ -114,14 +127,15 @@ impl Not for Value {
     }
 }
 
-// Only numbers have an ordering. Anything else yields `None`, which the
-// interpreter surfaces as a type error. (Equality is separate: `PartialEq`
-// above makes values of different types simply not equal.)
+// Numbers order numerically, strings lexicographically. Anything else yields
+// `None`, which the interpreter surfaces as a type error. (Equality is
+// separate: `PartialEq` above makes values of different types not equal.)
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Value) -> Option<Ordering> {
 
         match (self, other) {
             (Value::Number(l), Value::Number(r)) => l.partial_cmp(r),
+            (Value::Str(l), Value::Str(r)) => l.partial_cmp(r),
             _ => None,
         }
     }

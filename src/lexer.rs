@@ -6,6 +6,7 @@ use crate::error::{LangError, Result};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Number(f64),
+    Str(String),
     Ident(String),
     // Keywords
     Var,
@@ -43,6 +44,7 @@ impl fmt::Display for Token {
 
         match self {
             Token::Number(n) => write!(f, "{n}"),
+            Token::Str(s) => write!(f, "\"{s}\""),
             Token::Ident(name) => write!(f, "{name}"),
             Token::Var => write!(f, "var"),
             Token::True => write!(f, "true"),
@@ -165,6 +167,30 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                 } else {
                     tokens.push(Token::Greater);
                 }
+            }
+            '"' => {
+                chars.next(); // opening quote
+
+                let mut s = String::new();
+
+                loop {
+
+                    match chars.next() {
+                        None => return Err(LangError::UnterminatedString),
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some('n') => s.push('\n'),
+                            Some('t') => s.push('\t'),
+                            Some('"') => s.push('"'),
+                            Some('\\') => s.push('\\'),
+                            Some(c) => return Err(LangError::InvalidEscape(c)),
+                            None => return Err(LangError::UnterminatedString),
+                        },
+                        Some(c) => s.push(c),
+                    }
+                }
+
+                tokens.push(Token::Str(s));
             }
             '0'..='9' | '.' => {
                 let mut num = String::new();

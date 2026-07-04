@@ -42,3 +42,7 @@ pub fn num(n: f64) -> Value {
 pub fn boolean(b: bool) -> Value {
     Value::Bool(b)
 }
+
+pub fn string(s: &str) -> Value {
+    Value::Str(s.into())
+}

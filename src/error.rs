@@ -5,6 +5,8 @@ use std::fmt;
 pub enum LangError {
     UnexpectedChar(char),
     InvalidNumber(String),
+    UnterminatedString,
+    InvalidEscape(char),
     UnexpectedToken { expected: &'static str, found: String },
     UnexpectedEnd { expected: &'static str },
     UndefinedVariable(String),
@@ -29,6 +31,8 @@ impl fmt::Display for LangError {
         match self {
             LangError::UnexpectedChar(c) => write!(f, "unexpected character: {c:?}"),
             LangError::InvalidNumber(s) => write!(f, "invalid number: {s}"),
+            LangError::UnterminatedString => write!(f, "unterminated string literal"),
+            LangError::InvalidEscape(c) => write!(f, "invalid escape sequence: \\{c}"),
             LangError::UnexpectedToken { expected, found } => {
                 write!(f, "expected {expected}, found '{found}'")
             }

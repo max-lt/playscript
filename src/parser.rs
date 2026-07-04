@@ -330,6 +330,7 @@ impl Parser {
 
         match self.advance() {
             Some(Token::Number(n)) => Ok(Expr::Literal(Value::Number(n))),
+            Some(Token::Str(s)) => Ok(Expr::Literal(Value::Str(s.into()))),
             Some(Token::True) => Ok(Expr::Literal(Value::Bool(true))),
             Some(Token::False) => Ok(Expr::Literal(Value::Bool(false))),
             Some(Token::Ident(name)) => {

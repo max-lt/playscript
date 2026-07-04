@@ -71,13 +71,14 @@ impl Environment {
         debug_assert!(!self.scopes.is_empty(), "the global scope must survive");
     }
 
-    /// Read a variable, innermost scope first.
+    /// Read a variable, innermost scope first. Values clone cheaply:
+    /// numbers and bools copy, strings bump a refcount.
     fn get(&self, name: &str) -> Result<Value> {
         self.scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(name))
-            .copied()
+            .cloned()
             .ok_or_else(|| LangError::UndefinedVariable(name.to_string()))
     }
 
@@ -166,7 +167,7 @@ impl Interpreter {
         self.fuel.tick(1)?;
 
         match expr {
-            Expr::Literal(value) => Ok(*value),
+            Expr::Literal(value) => Ok(value.clone()),
             Expr::Variable(name) => self.env.get(name),
             Expr::Call { name, args } => self.call(name, args),
             Expr::Unary { op, operand } => {
@@ -184,7 +185,19 @@ impl Interpreter {
 
                 match op {
                     // The `std::ops` impls on `Value`: each returns a `Result`.
-                    BinaryOp::Add => l + r,
+                    BinaryOp::Add => {
+                        let result = (l + r)?;
+
+                        // Concatenation allocates: charge one op per byte of
+                        // the result, so fuel bounds memory too. Otherwise a
+                        // doubling loop (s = s + s) would OOM the host well
+                        // within an ops budget.
+                        if let Value::Str(s) = &result {
+                            self.fuel.tick(s.len() as u64)?;
+                        }
+
+                        Ok(result)
+                    }
                     BinaryOp::Sub => l - r,
                     BinaryOp::Mul => l * r,
                     BinaryOp::Div => l / r,
@@ -287,6 +300,29 @@ impl Interpreter {
                 };
 
                 Ok(Value::Number(self.fuel.limit as f64))
+            }
+            "str" => {
+                let [arg] = args else {
+                    return Err(wrong_arity(name, 1, args.len()));
+                };
+
+                // Explicit conversion — the strict counterpart of coercion:
+                // "n = " + str(n) instead of JS's silent "n = " + n.
+                match self.eval(arg)? {
+                    already @ Value::Str(_) => Ok(already),
+                    other => Ok(Value::Str(other.to_string().into())),
+                }
+            }
+            "len" => {
+                let [arg] = args else {
+                    return Err(wrong_arity(name, 1, args.len()));
+                };
+
+                match self.eval(arg)? {
+                    // Unicode scalar count, not bytes: len("héllo") == 5.
+                    Value::Str(s) => Ok(Value::Number(s.chars().count() as f64)),
+                    other => Err(LangError::InvalidUnaryOp { op: "len", operand: other.type_name() }),
+                }
             }
             _ => Err(LangError::UndefinedFunction(name.to_string())),
         }
