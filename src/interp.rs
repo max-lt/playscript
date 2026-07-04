@@ -23,7 +23,9 @@ const FUEL_PRINT_COST: u64 = 100;
 /// grows the host's stack, which would overflow long before 1M ops run out.
 /// The value assumes a normal (~8 MiB) native stack: each playscript call
 /// nests several Rust frames, so on a much smaller stack this guard may fire
-/// too late. Removing the assumption would mean an explicit heap call-stack.
+/// too late. Debug builds are the binding case (measured: 256 levels need
+/// 2-3 MiB in debug, under 512 KiB in release — see examples/stack_probe.rs).
+/// Removing the assumption entirely would mean an explicit heap call-stack.
 const MAX_CALL_DEPTH: usize = 256;
 
 /// Deterministic operation budget. Every AST node visited costs fuel, so
