@@ -8,7 +8,7 @@ use crate::value::Value;
 // Recursive descent. The grammar encodes operator precedence by call order:
 //   program    := statement*
 //   statement  := "var" IDENT "=" expr
-//                | IDENT "=" expr
+//                | expr ("=" expr)?          (assignment iff expr is an lvalue)
 //                | "function" IDENT "(" (IDENT ("," IDENT)*)? ")" block
 //                | "return" expr
 //                | "if" "(" expr ")" block ("else" (block | if))?
@@ -21,8 +21,10 @@ use crate::value::Value;
 //   comparison := term (("<" | "<=" | ">" | ">=") term)*
 //   term       := factor (("+" | "-") factor)*
 //   factor     := unary (("*" | "/") unary)*
-//   unary      := ("-" | "!") unary | primary
-//   primary    := NUMBER | "true" | "false" | IDENT ("(" args ")")? | "(" expr ")"
+//   unary      := ("-" | "!") unary | postfix
+//   postfix    := primary ("[" expr "]")*
+//   primary    := NUMBER | STRING | "true" | "false" | IDENT ("(" args ")")?
+//                | "[" args "]" | "(" expr ")"
 //   args       := (expr ("," expr)*)?
 
 pub struct Parser {
@@ -87,12 +89,33 @@ impl Parser {
             Some(Token::If) => self.if_statement(),
             Some(Token::While) => self.while_statement(),
             Some(Token::LBrace) => self.block(),
-            // Two-token lookahead: `x = ...` is an assignment, a lone `x` is
-            // an expression.
-            Some(Token::Ident(_)) if matches!(self.tokens.get(self.pos + 1), Some(Token::Equals)) => {
-                self.assign_statement()
+            _ => self.expr_or_assign_statement(),
+        }
+    }
+
+    // Parse an expression; if '=' follows, reinterpret the expression as an
+    // assignment target — a variable, or one indexing of a variable.
+    fn expr_or_assign_statement(&mut self) -> Result<Stmt> {
+        let expr = self.expr()?;
+
+        if !matches!(self.peek(), Some(Token::Equals)) {
+            return Ok(Stmt::Expr(expr));
+        }
+
+        self.advance(); // consume '='
+        let value = self.expr()?;
+
+        match expr {
+            Expr::Variable(name) => Ok(Stmt::Assign { name, value }),
+            Expr::Index { target, index } => {
+
+                if let Expr::Variable(name) = *target {
+                    return Ok(Stmt::IndexAssign { name, index: *index, value });
+                }
+
+                Err(LangError::InvalidAssignTarget)
             }
-            _ => Ok(Stmt::Expr(self.expr()?)),
+            _ => Err(LangError::InvalidAssignTarget),
         }
     }
 
@@ -108,18 +131,6 @@ impl Parser {
 
         let value = self.expr()?;
         Ok(Stmt::Let { name, value })
-    }
-
-    fn assign_statement(&mut self) -> Result<Stmt> {
-        let name = match self.advance() {
-            Some(Token::Ident(name)) => name,
-            other => return Err(expected("a variable name", other)),
-        };
-
-        self.advance(); // consume '=' (guaranteed by the lookahead)
-
-        let value = self.expr()?;
-        Ok(Stmt::Assign { name, value })
     }
 
     fn block(&mut self) -> Result<Stmt> {
@@ -323,7 +334,21 @@ impl Parser {
             return Ok(Expr::Unary { op, operand: Box::new(operand) });
         }
 
-        self.primary()
+        self.postfix()
+    }
+
+    // Postfix indexing binds tighter than any operator: a[0][1], f(x)[2].
+    fn postfix(&mut self) -> Result<Expr> {
+        let mut expr = self.primary()?;
+
+        while matches!(self.peek(), Some(Token::LBracket)) {
+            self.advance(); // consume '['
+            let index = self.expr()?;
+            self.expect(Token::RBracket, "']'")?;
+            expr = Expr::Index { target: Box::new(expr), index: Box::new(index) };
+        }
+
+        Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Expr> {
@@ -351,6 +376,26 @@ impl Parser {
                     Some(Token::RParen) => Ok(inner),
                     other => Err(expected("')'", other)),
                 }
+            }
+            Some(Token::LBracket) => {
+                let mut items = Vec::new();
+
+                if !matches!(self.peek(), Some(Token::RBracket)) {
+
+                    loop {
+                        items.push(self.expr()?);
+
+                        match self.peek() {
+                            Some(Token::Comma) => {
+                                self.advance();
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+
+                self.expect(Token::RBracket, "']'")?;
+                Ok(Expr::Array(items))
             }
             other => Err(expected("a literal, a variable or '('", other)),
         }

@@ -50,6 +50,10 @@ pub enum Expr {
     Variable(String),
     /// `f(a, b)` — functions are not values (yet), the callee is a name.
     Call { name: String, args: Vec<Expr> },
+    /// `[a, b, c]` — array literal.
+    Array(Vec<Expr>),
+    /// `target[index]` — read access; chains left-to-right (`m[i][j]`).
+    Index { target: Box<Expr>, index: Box<Expr> },
     Unary { op: UnaryOp, operand: Box<Expr> },
     Binary { op: BinaryOp, left: Box<Expr>, right: Box<Expr> },
 }
@@ -61,6 +65,8 @@ pub enum Stmt {
     Let { name: String, value: Expr },
     /// `x = expr` — update an existing binding, innermost scope first.
     Assign { name: String, value: Expr },
+    /// `x[i] = expr` — write one element of an array variable (copy-on-write).
+    IndexAssign { name: String, index: Expr, value: Expr },
     /// `{ ... }` — runs in its own scope.
     Block(Vec<Stmt>),
     /// Branches are always blocks (or another `If` for `else if`).

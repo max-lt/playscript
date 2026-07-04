@@ -34,6 +34,8 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Semicolon,
     Comma,
 }
@@ -70,6 +72,8 @@ impl fmt::Display for Token {
             Token::RParen => write!(f, ")"),
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
+            Token::LBracket => write!(f, "["),
+            Token::RBracket => write!(f, "]"),
             Token::Semicolon => write!(f, ";"),
             Token::Comma => write!(f, ","),
         }
@@ -118,6 +122,14 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             '}' => {
                 chars.next();
                 tokens.push(Token::RBrace);
+            }
+            '[' => {
+                chars.next();
+                tokens.push(Token::LBracket);
+            }
+            ']' => {
+                chars.next();
+                tokens.push(Token::RBracket);
             }
             ';' => {
                 chars.next();

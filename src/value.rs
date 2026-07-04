@@ -13,6 +13,10 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Str(Rc<str>),
+    /// Value semantics with copy-on-write: sharing the `Rc` is an invisible
+    /// optimization, `Rc::make_mut` copies at the first shared write.
+    /// No aliasing is ever observable, so no cycles can exist.
+    Array(Rc<Vec<Value>>),
 }
 
 impl Value {
@@ -23,6 +27,7 @@ impl Value {
             Value::Number(_) => "number",
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
+            Value::Array(_) => "array",
         }
     }
 }
@@ -34,6 +39,20 @@ impl fmt::Display for Value {
             Value::Number(n) => write!(f, "{n}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Str(s) => write!(f, "{s}"),
+            Value::Array(items) => {
+                write!(f, "[")?;
+
+                for (i, item) in items.iter().enumerate() {
+
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "{item}")?;
+                }
+
+                write!(f, "]")
+            }
         }
     }
 }

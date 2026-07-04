@@ -20,6 +20,9 @@ pub enum LangError {
     NoReturnValue { function: String },
     ReturnOutsideFunction,
     CallDepthExceeded { limit: usize },
+    InvalidIndex(String),
+    IndexOutOfBounds { index: usize, len: usize },
+    InvalidAssignTarget,
 }
 
 /// Crate-wide result alias: `Result<T>` == `Result<T, LangError>`.
@@ -64,6 +67,11 @@ impl fmt::Display for LangError {
             LangError::CallDepthExceeded { limit } => {
                 write!(f, "call depth limit exceeded ({limit})")
             }
+            LangError::InvalidIndex(got) => write!(f, "invalid array index: {got}"),
+            LangError::IndexOutOfBounds { index, len } => {
+                write!(f, "index {index} out of bounds (len {len})")
+            }
+            LangError::InvalidAssignTarget => write!(f, "invalid assignment target"),
         }
     }
 }

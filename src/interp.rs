@@ -170,6 +170,33 @@ impl Interpreter {
             Expr::Literal(value) => Ok(value.clone()),
             Expr::Variable(name) => self.env.get(name),
             Expr::Call { name, args } => self.call(name, args),
+            Expr::Array(items) => {
+                // Building an array costs one op per element, on top of the
+                // per-element evaluation — allocations are paid for.
+                self.fuel.tick(items.len() as u64)?;
+
+                let mut values = Vec::with_capacity(items.len());
+
+                for item in items {
+                    values.push(self.eval(item)?);
+                }
+
+                Ok(Value::Array(values.into()))
+            }
+            Expr::Index { target, index } => {
+                let target = self.eval(target)?;
+                let index = self.eval(index)?;
+
+                match target {
+                    Value::Array(items) => {
+                        let i = as_index(&index, items.len())?;
+                        Ok(items[i].clone())
+                    }
+                    other => {
+                        Err(LangError::InvalidUnaryOp { op: "[]", operand: other.type_name() })
+                    }
+                }
+            }
             Expr::Unary { op, operand } => {
                 let v = self.eval(operand)?;
 
@@ -321,8 +348,51 @@ impl Interpreter {
                 match self.eval(arg)? {
                     // Unicode scalar count, not bytes: len("héllo") == 5.
                     Value::Str(s) => Ok(Value::Number(s.chars().count() as f64)),
+                    Value::Array(items) => Ok(Value::Number(items.len() as f64)),
                     other => Err(LangError::InvalidUnaryOp { op: "len", operand: other.type_name() }),
                 }
+            }
+            "array" => {
+                let [count, fill] = args else {
+                    return Err(wrong_arity(name, 2, args.len()));
+                };
+
+                let count = self.eval(count)?;
+                let fill = self.eval(fill)?;
+
+                let Value::Number(n) = count else {
+                    return Err(LangError::InvalidIndex(count.type_name().to_string()));
+                };
+
+                if n.fract() != 0.0 || n < 0.0 {
+                    return Err(LangError::InvalidIndex(n.to_string()));
+                }
+
+                // Pay for the allocation before making it.
+                self.fuel.tick(n as u64)?;
+
+                Ok(Value::Array(vec![fill; n as usize].into()))
+            }
+            "push" => {
+                let [array, item] = args else {
+                    return Err(wrong_arity(name, 2, args.len()));
+                };
+
+                let array = self.eval(array)?;
+                let item = self.eval(item)?;
+
+                let Value::Array(items) = array else {
+                    return Err(LangError::InvalidUnaryOp { op: "push", operand: array.type_name() });
+                };
+
+                // Value semantics: push returns a new array. Building one
+                // element at a time is O(n²) ops — array(n, fill) plus index
+                // writes is the cheap way to build big.
+                self.fuel.tick(items.len() as u64 + 1)?;
+
+                let mut items = items.as_ref().clone();
+                items.push(item);
+                Ok(Value::Array(items.into()))
             }
             _ => Err(LangError::UndefinedFunction(name.to_string())),
         }
@@ -340,6 +410,33 @@ impl Interpreter {
             Stmt::Assign { name, value } => {
                 let v = self.eval(value)?;
                 self.env.assign(name, v)?;
+                Ok(Flow::Value(None))
+            }
+            Stmt::IndexAssign { name, index, value } => {
+                let index = self.eval(index)?;
+                let value = self.eval(value)?;
+
+                // Locate the binding like `=` does, innermost scope first.
+                let slot = self
+                    .env
+                    .scopes
+                    .iter_mut()
+                    .rev()
+                    .find_map(|scope| scope.get_mut(name))
+                    .ok_or_else(|| LangError::UndefinedVariable(name.clone()))?;
+
+                let Value::Array(items) = slot else {
+                    return Err(LangError::InvalidUnaryOp { op: "[]=", operand: slot.type_name() });
+                };
+
+                let i = as_index(&index, items.len())?;
+
+                // Copy-on-write: writing to a shared array pays for the copy
+                // it triggers; writing to an unshared one is a plain store.
+                let cost = if Rc::strong_count(items) > 1 { items.len() as u64 } else { 1 };
+                self.fuel.tick(cost)?;
+
+                Rc::make_mut(items)[i] = value;
                 Ok(Flow::Value(None))
             }
             Stmt::Function(function) => {
@@ -417,6 +514,26 @@ impl Interpreter {
 
 fn wrong_arity(function: &str, expected: usize, got: usize) -> LangError {
     LangError::WrongArity { function: function.to_string(), expected, got }
+}
+
+/// Validate an evaluated index against an array length: it must be a
+/// non-negative integer number, strictly below `len`.
+fn as_index(value: &Value, len: usize) -> Result<usize> {
+    let Value::Number(n) = value else {
+        return Err(LangError::InvalidIndex(value.type_name().to_string()));
+    };
+
+    if n.fract() != 0.0 || *n < 0.0 {
+        return Err(LangError::InvalidIndex(n.to_string()));
+    }
+
+    let index = *n as usize;
+
+    if index >= len {
+        return Err(LangError::IndexOutOfBounds { index, len });
+    }
+
+    Ok(index)
 }
 
 /// Ordering comparisons. `PartialOrd` on `Value` yields `None` for anything
