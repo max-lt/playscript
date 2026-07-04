@@ -3,13 +3,13 @@
 	import { load, runProgram, type JsonValue, type RunResult, type TraceEvent } from '$lib/engine';
 
 	const EXAMPLES: Record<string, string> = {
-		'Fibonacci récursif': `function fib(n) {\n  if (n < 2) { return n }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfib(6)`,
-		'Somme (boucle)': `var sum = 0;\nvar i = 1;\nwhile (i <= 5) {\n  sum = sum + i;\n  i = i + 1\n}\nsum`,
-		'Tri à bulles': `var a = [5, 3, 8, 1, 9];\nvar n = len(a);\nvar i = 0;\nwhile (i < n) {\n  var j = 0;\n  while (j < n - 1) {\n    if (a[j] > a[j + 1]) {\n      var t = a[j];\n      a[j] = a[j + 1];\n      a[j + 1] = t\n    }\n    j = j + 1\n  }\n  i = i + 1\n}\na`,
-		'Monade Maybe': `function unit(x) { return [x] }\nfunction bind(m, f) {\n  if (len(m) == 0) { return [] }\n  return f(m[0])\n}\nfunction safediv(a, b) {\n  if (b == 0) { return [] }\n  return [a / b]\n}\n\nbind(bind(unit(20), x => safediv(x, 2)), y => safediv(y, 5))`
+		'Fibonacci (recursive)': `function fib(n) {\n  if (n < 2) { return n }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfib(6)`,
+		'Sum (loop)': `var sum = 0;\nvar i = 1;\nwhile (i <= 5) {\n  sum = sum + i;\n  i = i + 1\n}\nsum`,
+		'Bubble sort': `var a = [5, 3, 8, 1, 9];\nvar n = len(a);\nvar i = 0;\nwhile (i < n) {\n  var j = 0;\n  while (j < n - 1) {\n    if (a[j] > a[j + 1]) {\n      var t = a[j];\n      a[j] = a[j + 1];\n      a[j + 1] = t\n    }\n    j = j + 1\n  }\n  i = i + 1\n}\na`,
+		'Maybe monad': `function unit(x) { return [x] }\nfunction bind(m, f) {\n  if (len(m) == 0) { return [] }\n  return f(m[0])\n}\nfunction safediv(a, b) {\n  if (b == 0) { return [] }\n  return [a / b]\n}\n\nbind(bind(unit(20), x => safediv(x, 2)), y => safediv(y, 5))`
 	};
 
-	let source = $state(EXAMPLES['Fibonacci récursif']);
+	let source = $state(EXAMPLES['Fibonacci (recursive)']);
 	let ready = $state(false);
 	let result = $state<RunResult | null>(null);
 	let step = $state(0);
@@ -88,7 +88,7 @@
 	<header class="flex items-baseline gap-3 border-b border-slate-800 px-5 py-3">
 		<h1 class="text-lg font-semibold tracking-tight">playscript</h1>
 		<p class="hidden text-sm text-slate-500 sm:block">
-			un langage déterministe et métré — le programme, et son déroulé
+			a deterministic, metered language — the program, and how it runs
 		</p>
 	</header>
 
@@ -116,9 +116,9 @@
 					onclick={run}
 					disabled={!ready}
 				>
-					{ready ? 'Exécuter' : 'Chargement…'}
+					{ready ? 'Run' : 'Loading…'}
 				</button>
-				<span class="text-xs text-slate-500">⌘/Ctrl + Entrée</span>
+				<span class="text-xs text-slate-500">⌘/Ctrl + Enter</span>
 			</div>
 		</section>
 
@@ -130,14 +130,14 @@
 				>
 					{#if result.ok}
 						<span class="truncate">
-							<span class="text-slate-500">résultat</span>
+							<span class="text-slate-500">result</span>
 							<span class="ml-2 font-mono text-emerald-400"> {fmtValue(result.value)} </span>
 						</span>
 					{:else}
 						<span class="truncate font-mono text-rose-400"> {result.error} </span>
 					{/if}
 					<span class="shrink-0 font-mono text-xs text-slate-400">
-						{result.ops.toLocaleString('fr-FR')} ops
+						{result.ops.toLocaleString('en-US')} ops
 					</span>
 				</div>
 
@@ -185,10 +185,10 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="p-4 text-sm text-slate-500">Aucun événement observable.</div>
+					<div class="p-4 text-sm text-slate-500">No observable events.</div>
 				{/if}
 			{:else}
-				<div class="p-4 text-sm text-slate-500">Chargement du moteur…</div>
+				<div class="p-4 text-sm text-slate-500">Loading the engine…</div>
 			{/if}
 		</section>
 	</main>
