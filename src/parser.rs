@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::ast::{BinaryOp, Expr, Function, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Function, LogicalOp, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
 use crate::lexer::Token;
 use crate::value::Value;
@@ -16,14 +16,17 @@ use crate::value::Value;
 //                | block
 //                | expr
 //   block      := "{" statement* "}"
-//   expr       := equality
+//   expr       := lambda | or
+//   lambda     := (IDENT | "(" params ")") "=>" (expr | block)
+//   or         := and ("||" and)*
+//   and        := equality ("&&" equality)*
 //   equality   := comparison (("==" | "!=") comparison)*
 //   comparison := term (("<" | "<=" | ">" | ">=") term)*
 //   term       := factor (("+" | "-") factor)*
-//   factor     := unary (("*" | "/") unary)*
+//   factor     := unary (("*" | "/" | "%") unary)*
 //   unary      := ("-" | "!") unary | postfix
-//   postfix    := primary ("[" expr "]")*
-//   primary    := NUMBER | STRING | "true" | "false" | IDENT ("(" args ")")?
+//   postfix    := primary ("[" expr "]" | "(" args ")")*
+//   primary    := NUMBER | STRING | "true" | "false" | IDENT
 //                | "[" args "]" | "(" expr ")"
 //   args       := (expr ("," expr)*)?
 
@@ -213,7 +216,19 @@ impl Parser {
         };
 
         self.expect(Token::LParen, "'('")?;
+        let params = self.parameters()?;
 
+        let body = match self.peek() {
+            Some(Token::LBrace) => self.block()?,
+            _ => return Err(expected("'{'", self.advance())),
+        };
+
+        Ok(Stmt::Function(Rc::new(Function { name: Some(name), params, body })))
+    }
+
+    /// Comma-separated parameter names; the opening '(' is already consumed,
+    /// the closing ')' is consumed here.
+    fn parameters(&mut self) -> Result<Vec<String>> {
         let mut params = Vec::new();
 
         if !matches!(self.peek(), Some(Token::RParen)) {
@@ -235,13 +250,7 @@ impl Parser {
         }
 
         self.expect(Token::RParen, "')'")?;
-
-        let body = match self.peek() {
-            Some(Token::LBrace) => self.block()?,
-            _ => return Err(expected("'{'", self.advance())),
-        };
-
-        Ok(Stmt::Function(Rc::new(Function { name, params, body })))
+        Ok(params)
     }
 
     fn return_statement(&mut self) -> Result<Stmt> {
@@ -253,7 +262,93 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Result<Expr> {
-        self.equality()
+
+        // `x => ...` — a single-parameter lambda.
+        if matches!(self.peek(), Some(Token::Ident(_)))
+            && matches!(self.tokens.get(self.pos + 1), Some(Token::FatArrow))
+        {
+            let param = match self.advance() {
+                Some(Token::Ident(param)) => param,
+                _ => unreachable!("checked by the lookahead above"),
+            };
+
+            self.advance(); // consume '=>'
+            return self.lambda_body(vec![param]);
+        }
+
+        // `(a, b) => ...` — scan ahead: a parenthesized head is a lambda
+        // only if its matching ')' is immediately followed by '=>'.
+        if matches!(self.peek(), Some(Token::LParen)) && self.paren_group_is_lambda() {
+            self.advance(); // consume '('
+            let params = self.parameters()?;
+            self.expect(Token::FatArrow, "'=>'")?;
+            return self.lambda_body(params);
+        }
+
+        self.or_expr()
+    }
+
+    fn paren_group_is_lambda(&self) -> bool {
+        let mut depth = 0usize;
+        let mut i = self.pos;
+
+        while let Some(tok) = self.tokens.get(i) {
+
+            match tok {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+
+                    if depth == 0 {
+                        return matches!(self.tokens.get(i + 1), Some(Token::FatArrow));
+                    }
+                }
+                _ => {}
+            }
+
+            i += 1;
+        }
+
+        false
+    }
+
+    // The '=>' is already consumed. An expression body is sugar for a block
+    // that returns it: `x => x + 1` == `x => { return x + 1 }`.
+    fn lambda_body(&mut self, params: Vec<String>) -> Result<Expr> {
+        let body = if matches!(self.peek(), Some(Token::LBrace)) {
+            self.block()?
+        } else {
+            let value = self.expr()?;
+            Stmt::Block(vec![Stmt::Return(value)])
+        };
+
+        Ok(Expr::Lambda(Rc::new(Function { name: None, params, body })))
+    }
+
+    // || and && build `Logical` nodes, not `Binary`: they short-circuit,
+    // so they cannot share the eval-both-sides machinery.
+    fn or_expr(&mut self) -> Result<Expr> {
+        let mut left = self.and_expr()?;
+
+        while matches!(self.peek(), Some(Token::OrOr)) {
+            self.advance();
+            let right = self.and_expr()?;
+            left = Expr::Logical { op: LogicalOp::Or, left: Box::new(left), right: Box::new(right) };
+        }
+
+        Ok(left)
+    }
+
+    fn and_expr(&mut self) -> Result<Expr> {
+        let mut left = self.equality()?;
+
+        while matches!(self.peek(), Some(Token::AndAnd)) {
+            self.advance();
+            let right = self.equality()?;
+            left = Expr::Logical { op: LogicalOp::And, left: Box::new(left), right: Box::new(right) };
+        }
+
+        Ok(left)
     }
 
     // One precedence level: `match_op` decides which tokens belong to this
@@ -315,6 +410,7 @@ impl Parser {
             |tok| match tok {
                 Token::Star => Some(BinaryOp::Mul),
                 Token::Slash => Some(BinaryOp::Div),
+                Token::Percent => Some(BinaryOp::Mod),
                 _ => None,
             },
             Self::unary,
@@ -337,15 +433,27 @@ impl Parser {
         self.postfix()
     }
 
-    // Postfix indexing binds tighter than any operator: a[0][1], f(x)[2].
+    // Postfix operators bind tighter than anything else, and they chain:
+    // a[0][1], f(x)(y), fs[i](x).
     fn postfix(&mut self) -> Result<Expr> {
         let mut expr = self.primary()?;
 
-        while matches!(self.peek(), Some(Token::LBracket)) {
-            self.advance(); // consume '['
-            let index = self.expr()?;
-            self.expect(Token::RBracket, "']'")?;
-            expr = Expr::Index { target: Box::new(expr), index: Box::new(index) };
+        loop {
+
+            match self.peek() {
+                Some(Token::LBracket) => {
+                    self.advance(); // consume '['
+                    let index = self.expr()?;
+                    self.expect(Token::RBracket, "']'")?;
+                    expr = Expr::Index { target: Box::new(expr), index: Box::new(index) };
+                }
+                Some(Token::LParen) => {
+                    self.advance(); // consume '('
+                    let args = self.arguments()?;
+                    expr = Expr::Call { callee: Box::new(expr), args };
+                }
+                _ => break,
+            }
         }
 
         Ok(expr)
@@ -358,17 +466,7 @@ impl Parser {
             Some(Token::Str(s)) => Ok(Expr::Literal(Value::Str(s.into()))),
             Some(Token::True) => Ok(Expr::Literal(Value::Bool(true))),
             Some(Token::False) => Ok(Expr::Literal(Value::Bool(false))),
-            Some(Token::Ident(name)) => {
-
-                // A name followed by '(' is a call, otherwise a variable.
-                if matches!(self.peek(), Some(Token::LParen)) {
-                    self.advance(); // consume '('
-                    let args = self.arguments()?;
-                    return Ok(Expr::Call { name, args });
-                }
-
-                Ok(Expr::Variable(name))
-            }
+            Some(Token::Ident(name)) => Ok(Expr::Variable(name)),
             Some(Token::LParen) => {
                 let inner = self.expr()?;
 

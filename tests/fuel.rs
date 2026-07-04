@@ -28,7 +28,9 @@ fn execution_is_deterministic() {
     };
 
     assert_eq!(first, second);
-    assert_eq!(first.0, Some(num(55.0)));
+    // 52 is pinned on purpose: a change here means the cost table (the
+    // logical clock) moved, which any replay format must version.
+    assert_eq!(first.0, Some(num(52.0)));
 }
 
 #[test]

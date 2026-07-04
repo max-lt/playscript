@@ -2,11 +2,15 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{BinaryOp, Expr, Function, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Function, LogicalOp, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
 use crate::lexer::tokenize;
 use crate::parser::Parser;
-use crate::value::Value;
+use crate::value::{Closure, Value};
+
+/// Builtins reachable as plain names (unless shadowed by a user binding).
+const BUILTIN_NAMES: &[&str] =
+    &["print", "getOperations", "getOperationsLimit", "str", "len", "array", "push"];
 
 /// Default operation budget for one `run`.
 pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
@@ -114,12 +118,11 @@ enum Flow {
     Return(Value),
 }
 
-/// The engine: owns the program's memory, the fuel meter and the
-/// function registry.
+/// The engine: owns the program's memory and the fuel meter. Functions are
+/// ordinary values living in the environment.
 pub struct Interpreter {
     env: Environment,
     fuel: Fuel,
-    functions: HashMap<String, Rc<Function>>,
     depth: usize,
 }
 
@@ -128,7 +131,6 @@ impl Interpreter {
         Interpreter {
             env: Environment::default(),
             fuel: Fuel { used: 0, limit: fuel_limit },
-            functions: HashMap::new(),
             depth: 0,
         }
     }
@@ -168,8 +170,33 @@ impl Interpreter {
 
         match expr {
             Expr::Literal(value) => Ok(value.clone()),
-            Expr::Variable(name) => self.env.get(name),
-            Expr::Call { name, args } => self.call(name, args),
+            Expr::Variable(name) => {
+
+                if let Ok(value) = self.env.get(name) {
+                    return Ok(value);
+                }
+
+                // Unshadowed builtins resolve as values: `var p = print`.
+                BUILTIN_NAMES
+                    .iter()
+                    .find(|&&builtin| builtin == name)
+                    .map(|&builtin| Value::Builtin(builtin))
+                    .ok_or_else(|| LangError::UndefinedVariable(name.to_string()))
+            }
+            Expr::Lambda(function) => self.make_closure(function),
+            Expr::Call { callee, args } => {
+
+                match self.eval(callee)? {
+                    Value::Function(closure) => self.call_closure(&closure, args),
+                    Value::Builtin(builtin) => {
+                        self.fuel.tick(FUEL_CALL_COST)?;
+                        self.call_builtin(builtin, args)
+                    }
+                    other => {
+                        Err(LangError::InvalidUnaryOp { op: "()", operand: other.type_name() })
+                    }
+                }
+            }
             Expr::Array(items) => {
                 // Building an array costs one op per element, on top of the
                 // per-element evaluation — allocations are paid for.
@@ -206,6 +233,32 @@ impl Interpreter {
                     UnaryOp::Not => !v,
                 }
             }
+            Expr::Logical { op, left, right } => {
+                let left = self.eval(left)?;
+
+                let Value::Bool(left) = left else {
+                    return Err(LangError::InvalidUnaryOp {
+                        op: op.symbol(),
+                        operand: left.type_name(),
+                    });
+                };
+
+                // Short-circuit: when the left side decides, the right side
+                // is never evaluated — and never charged.
+                match (op, left) {
+                    (LogicalOp::And, false) => return Ok(Value::Bool(false)),
+                    (LogicalOp::Or, true) => return Ok(Value::Bool(true)),
+                    _ => {}
+                }
+
+                match self.eval(right)? {
+                    Value::Bool(right) => Ok(Value::Bool(right)),
+                    other => Err(LangError::InvalidUnaryOp {
+                        op: op.symbol(),
+                        operand: other.type_name(),
+                    }),
+                }
+            }
             Expr::Binary { op, left, right } => {
                 let l = self.eval(left)?;
                 let r = self.eval(right)?;
@@ -228,6 +281,7 @@ impl Interpreter {
                     BinaryOp::Sub => l - r,
                     BinaryOp::Mul => l * r,
                     BinaryOp::Div => l / r,
+                    BinaryOp::Mod => l % r,
                     // Equality is total: values of different types are not equal.
                     BinaryOp::Eq => Ok(Value::Bool(l == r)),
                     BinaryOp::Ne => Ok(Value::Bool(l != r)),
@@ -239,22 +293,32 @@ impl Interpreter {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Expr]) -> Result<Value> {
-        self.fuel.tick(FUEL_CALL_COST)?;
+    /// Build a function value: snapshot the visible locals BY VALUE (cheap —
+    /// values clone by refcount). Globals are not captured, they stay live.
+    /// Capture-by-value keeps the no-aliasing invariant: a closure can never
+    /// share mutable state with its surroundings.
+    fn make_closure(&mut self, function: &Rc<Function>) -> Result<Value> {
+        let mut captures = HashMap::new();
 
-        // User-defined functions are looked up first: shadowing a builtin
-        // is allowed, like shadowing a variable.
-        if let Some(function) = self.functions.get(name).cloned() {
-            return self.call_user(&function, args);
+        for scope in &self.env.scopes[1..] {
+
+            for (name, value) in scope {
+                captures.insert(name.clone(), value.clone());
+            }
         }
 
-        self.call_builtin(name, args)
+        // Creating a closure pays one op per captured binding.
+        self.fuel.tick(captures.len() as u64)?;
+
+        Ok(Value::Function(Rc::new(Closure { function: Rc::clone(function), captures })))
     }
 
-    fn call_user(&mut self, function: &Function, args: &[Expr]) -> Result<Value> {
+    fn call_closure(&mut self, closure: &Rc<Closure>, args: &[Expr]) -> Result<Value> {
+        self.fuel.tick(FUEL_CALL_COST)?;
+        let function = &closure.function;
 
         if args.len() != function.params.len() {
-            return Err(wrong_arity(&function.name, function.params.len(), args.len()));
+            return Err(wrong_arity(&function_name(function), function.params.len(), args.len()));
         }
 
         // Arguments are evaluated in the caller's environment, before the switch.
@@ -271,12 +335,22 @@ impl Interpreter {
             return Err(LangError::CallDepthExceeded { limit: MAX_CALL_DEPTH });
         }
 
-        // Lexical scoping: the body sees the globals and its own scope only.
-        // The caller's locals are set aside for the duration of the call —
-        // leaving them visible would be dynamic scoping, the classic
-        // tree-walker trap.
+        // Lexical scoping: the body sees the globals, its captures and its
+        // own scopes. The caller's locals are set aside for the duration of
+        // the call — leaving them visible would be dynamic scoping, the
+        // classic tree-walker trap.
         let caller_locals = self.env.scopes.split_off(1);
-        self.env.push_scope();
+
+        // Fresh per-call copy of the captures; the function's own name binds
+        // to itself so named functions can always recurse.
+        let mut captures = closure.captures.clone();
+
+        if let Some(name) = &function.name {
+            captures.insert(name.clone(), Value::Function(Rc::clone(closure)));
+        }
+
+        self.env.scopes.push(captures);
+        self.env.push_scope(); // parameters (may shadow captures)
 
         for (param, value) in function.params.iter().zip(values) {
             self.env.declare(param.clone(), value);
@@ -291,7 +365,9 @@ impl Interpreter {
         match outcome? {
             Flow::Return(value) => Ok(value),
             // No null in the language: a call must produce a value.
-            Flow::Value(_) => Err(LangError::NoReturnValue { function: function.name.clone() }),
+            Flow::Value(_) => {
+                Err(LangError::NoReturnValue { function: function_name(function) })
+            }
         }
     }
 
@@ -440,8 +516,11 @@ impl Interpreter {
                 Ok(Flow::Value(None))
             }
             Stmt::Function(function) => {
-                // Registration only; redefining is allowed (REPL-friendly).
-                self.functions.insert(function.name.clone(), Rc::clone(function));
+                // A function statement is just a variable binding to a
+                // function value; redefining is allowed (REPL-friendly).
+                let value = self.make_closure(function)?;
+                let name = function.name.clone().expect("function statements are named");
+                self.env.declare(name, value);
                 Ok(Flow::Value(None))
             }
             Stmt::Return(expr) => {
@@ -514,6 +593,10 @@ impl Interpreter {
 
 fn wrong_arity(function: &str, expected: usize, got: usize) -> LangError {
     LangError::WrongArity { function: function.to_string(), expected, got }
+}
+
+fn function_name(function: &Function) -> String {
+    function.name.clone().unwrap_or_else(|| "<lambda>".to_string())
 }
 
 /// Validate an evaluated index against an array length: it must be a

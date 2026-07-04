@@ -1,14 +1,25 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
-use std::ops::{Add, Div, Mul, Neg, Not, Sub};
+use std::ops::{Add, Div, Mul, Neg, Not, Rem, Sub};
 use std::rc::Rc;
 
+use crate::ast::Function;
 use crate::error::{LangError, Result};
+
+/// A function value: shared code plus the locals it captured — by value —
+/// when it was created. Globals are not captured; they stay live, which is
+/// what keeps top-level recursion working.
+#[derive(Debug)]
+pub struct Closure {
+    pub(crate) function: Rc<Function>,
+    pub(crate) captures: HashMap<String, Value>,
+}
 
 /// A runtime value — the dynamic type of the language.
 /// Numbers and bools are plain; strings are immutable and reference-counted,
 /// so cloning any `Value` stays cheap (at most a refcount bump).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
     Bool(bool),
@@ -17,6 +28,28 @@ pub enum Value {
     /// optimization, `Rc::make_mut` copies at the first shared write.
     /// No aliasing is ever observable, so no cycles can exist.
     Array(Rc<Vec<Value>>),
+    /// First-class user function (immutable, so sharing is invisible).
+    Function(Rc<Closure>),
+    /// A host builtin referenced as a value, e.g. `var p = print`.
+    Builtin(&'static str),
+}
+
+// Equality is total and strict: values of different types are simply not
+// equal. Numbers, bools, strings and arrays compare structurally; functions
+// compare by identity (two lambdas with identical code are still distinct).
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+
+        match (self, other) {
+            (Value::Number(l), Value::Number(r)) => l == r,
+            (Value::Bool(l), Value::Bool(r)) => l == r,
+            (Value::Str(l), Value::Str(r)) => l == r,
+            (Value::Array(l), Value::Array(r)) => l == r,
+            (Value::Function(l), Value::Function(r)) => Rc::ptr_eq(l, r),
+            (Value::Builtin(l), Value::Builtin(r)) => l == r,
+            _ => false,
+        }
+    }
 }
 
 impl Value {
@@ -28,6 +61,7 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
             Value::Array(_) => "array",
+            Value::Function(_) | Value::Builtin(_) => "function",
         }
     }
 }
@@ -53,6 +87,14 @@ impl fmt::Display for Value {
 
                 write!(f, "]")
             }
+            Value::Function(closure) => {
+
+                match &closure.function.name {
+                    Some(name) => write!(f, "<function {name}>"),
+                    None => write!(f, "<lambda>"),
+                }
+            }
+            Value::Builtin(name) => write!(f, "<builtin {name}>"),
         }
     }
 }
@@ -118,6 +160,21 @@ impl Div for Value {
             (Value::Number(_), Value::Number(r)) if r == 0.0 => Err(LangError::DivisionByZero),
             (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l / r)),
             (l, r) => Err(invalid_binary("/", l, r)),
+        }
+    }
+}
+
+impl Rem for Value {
+    type Output = Result<Value>;
+
+    fn rem(self, rhs: Value) -> Result<Value> {
+
+        match (self, rhs) {
+            (Value::Number(_), Value::Number(r)) if r == 0.0 => Err(LangError::DivisionByZero),
+            // f64 remainder: the result takes the sign of the dividend,
+            // like JS: -7 % 3 == -1.
+            (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l % r)),
+            (l, r) => Err(invalid_binary("%", l, r)),
         }
     }
 }

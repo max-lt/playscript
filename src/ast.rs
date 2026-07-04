@@ -16,6 +16,7 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Eq,
     Ne,
     Lt,
@@ -33,6 +34,7 @@ impl BinaryOp {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
+            BinaryOp::Mod => "%",
             BinaryOp::Eq => "==",
             BinaryOp::Ne => "!=",
             BinaryOp::Lt => "<",
@@ -43,19 +45,42 @@ impl BinaryOp {
     }
 }
 
+/// Logical operators — kept apart from `BinaryOp` because they
+/// short-circuit: the right operand may never be evaluated at all.
+#[derive(Debug, Clone, Copy)]
+pub enum LogicalOp {
+    And,
+    Or,
+}
+
+impl LogicalOp {
+    /// Source-level symbol, used in error messages.
+    pub fn symbol(self) -> &'static str {
+
+        match self {
+            LogicalOp::And => "&&",
+            LogicalOp::Or => "||",
+        }
+    }
+}
+
 /// An expression: evaluates to a value.
 #[derive(Debug)]
 pub enum Expr {
     Literal(Value),
     Variable(String),
-    /// `f(a, b)` — functions are not values (yet), the callee is a name.
-    Call { name: String, args: Vec<Expr> },
+    /// `callee(a, b)` — the callee is any expression: a variable, an array
+    /// element, another call's result...
+    Call { callee: Box<Expr>, args: Vec<Expr> },
+    /// `x => expr` or `(a, b) => { ... }` — an anonymous function literal.
+    Lambda(Rc<Function>),
     /// `[a, b, c]` — array literal.
     Array(Vec<Expr>),
     /// `target[index]` — read access; chains left-to-right (`m[i][j]`).
     Index { target: Box<Expr>, index: Box<Expr> },
     Unary { op: UnaryOp, operand: Box<Expr> },
     Binary { op: BinaryOp, left: Box<Expr>, right: Box<Expr> },
+    Logical { op: LogicalOp, left: Box<Expr>, right: Box<Expr> },
 }
 
 /// A statement: executed for its effect.
@@ -81,10 +106,10 @@ pub enum Stmt {
     Expr(Expr),
 }
 
-/// A user-defined function. The body is always a block.
+/// A user-defined function. The body is always a block; lambdas have no name.
 #[derive(Debug)]
 pub struct Function {
-    pub name: String,
+    pub name: Option<String>,
     pub params: Vec<String>,
     pub body: Stmt,
 }

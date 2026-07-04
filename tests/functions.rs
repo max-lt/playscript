@@ -46,7 +46,8 @@ fn arity_is_checked() {
 
 #[test]
 fn calling_unknown_function() {
-    assert!(matches!(eval_err("boom(1)"), LangError::UndefinedFunction(_)));
+    // Functions are variables now, so an unknown callee is an unknown name.
+    assert!(matches!(eval_err("boom(1)"), LangError::UndefinedVariable(_)));
 }
 
 #[test]

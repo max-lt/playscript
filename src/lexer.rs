@@ -19,10 +19,14 @@ pub enum Token {
     Return,
     // Operators and punctuation
     Equals,
+    FatArrow,
     Plus,
     Minus,
     Star,
     Slash,
+    Percent,
+    AndAnd,
+    OrOr,
     Bang,
     EqualEqual,
     BangEqual,
@@ -57,10 +61,14 @@ impl fmt::Display for Token {
             Token::Function => write!(f, "function"),
             Token::Return => write!(f, "return"),
             Token::Equals => write!(f, "="),
+            Token::FatArrow => write!(f, "=>"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
+            Token::Percent => write!(f, "%"),
+            Token::AndAnd => write!(f, "&&"),
+            Token::OrOr => write!(f, "||"),
             Token::Bang => write!(f, "!"),
             Token::EqualEqual => write!(f, "=="),
             Token::BangEqual => write!(f, "!="),
@@ -105,7 +113,45 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             }
             '/' => {
                 chars.next();
-                tokens.push(Token::Slash);
+
+                if chars.peek() == Some(&'/') {
+
+                    // Line comment: skip everything up to the end of line.
+                    while let Some(&c) = chars.peek() {
+
+                        if c == '\n' {
+                            break;
+                        }
+
+                        chars.next();
+                    }
+                } else {
+                    tokens.push(Token::Slash);
+                }
+            }
+            '%' => {
+                chars.next();
+                tokens.push(Token::Percent);
+            }
+            '&' => {
+                chars.next();
+
+                if chars.peek() == Some(&'&') {
+                    chars.next();
+                    tokens.push(Token::AndAnd);
+                } else {
+                    return Err(LangError::UnexpectedChar('&'));
+                }
+            }
+            '|' => {
+                chars.next();
+
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                    tokens.push(Token::OrOr);
+                } else {
+                    return Err(LangError::UnexpectedChar('|'));
+                }
             }
             '(' => {
                 chars.next();
@@ -146,6 +192,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                 if chars.peek() == Some(&'=') {
                     chars.next();
                     tokens.push(Token::EqualEqual);
+                } else if chars.peek() == Some(&'>') {
+                    chars.next();
+                    tokens.push(Token::FatArrow);
                 } else {
                     tokens.push(Token::Equals);
                 }
