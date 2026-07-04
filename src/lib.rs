@@ -11,8 +11,10 @@ mod error;
 mod interp;
 mod lexer;
 mod parser;
+mod trace;
 mod value;
 
 pub use error::LangError;
 pub use interp::{DEFAULT_FUEL_LIMIT, Interpreter};
+pub use trace::{EventKind, TraceEvent};
 pub use value::Value;

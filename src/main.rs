@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use playscript::{DEFAULT_FUEL_LIMIT, Interpreter};
+use playscript::{DEFAULT_FUEL_LIMIT, Interpreter, TraceEvent};
 
 fn repl() {
     let stdin = io::stdin();
@@ -41,26 +41,54 @@ fn repl() {
     }
 }
 
+/// Print a recorded trace: one line per event, the op-clock in the left
+/// column, indented by call depth.
+fn print_trace(events: &[TraceEvent]) {
+    println!("── trace: {} events ──", events.len());
+
+    for event in events {
+        let indent = "  ".repeat(event.depth);
+        println!("op {:>7} │ {indent}{}", event.op, event.kind);
+    }
+
+    println!("──");
+}
+
 fn main() {
-    // With arguments: evaluate one program and exit.
-    // Without arguments: start the REPL.
+    // `--trace <program>` records and prints an execution trace.
+    // Other args: evaluate one program and exit. No args: start the REPL.
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if !args.is_empty() {
-        let src = args.join(" ");
-        let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT);
+    let (tracing, program) = match args.split_first() {
+        Some((flag, rest)) if flag == "--trace" => (true, rest.join(" ")),
+        _ => (false, args.join(" ")),
+    };
 
-        match interp.run(&src) {
-            Ok(Some(value)) => println!("{value}"),
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
-        }
-
+    if program.is_empty() {
+        repl();
         return;
     }
 
-    repl();
+    let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT);
+
+    if tracing {
+        interp.enable_tracing();
+    }
+
+    match interp.run(&program) {
+        Ok(value) => {
+
+            if let Some(events) = interp.trace() {
+                print_trace(events);
+            }
+
+            if let Some(value) = value {
+                println!("{value}");
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }

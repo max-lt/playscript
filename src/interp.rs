@@ -6,6 +6,7 @@ use crate::ast::{BinaryOp, Expr, Function, LogicalOp, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
 use crate::lexer::tokenize;
 use crate::parser::Parser;
+use crate::trace::{EventKind, TraceEvent};
 use crate::value::{Closure, Value};
 
 /// Builtins reachable as plain names (unless shadowed by a user binding).
@@ -124,6 +125,9 @@ pub struct Interpreter {
     env: Environment,
     fuel: Fuel,
     depth: usize,
+    /// `Some` when tracing is enabled. Recording never ticks fuel, so a
+    /// traced run and a plain run produce identical results and op counts.
+    trace: Option<Vec<TraceEvent>>,
 }
 
 impl Interpreter {
@@ -132,6 +136,7 @@ impl Interpreter {
             env: Environment::default(),
             fuel: Fuel { used: 0, limit: fuel_limit },
             depth: 0,
+            trace: None,
         }
     }
 
@@ -144,6 +149,10 @@ impl Interpreter {
 
         self.fuel.used = 0;
         self.depth = 0;
+
+        if let Some(trace) = self.trace.as_mut() {
+            trace.clear();
+        }
 
         let mut last = None;
 
@@ -161,6 +170,32 @@ impl Interpreter {
     /// Operations consumed by the last `run`.
     pub fn fuel_used(&self) -> u64 {
         self.fuel.used
+    }
+
+    /// Turn on execution tracing. The next `run` records the meaningful steps
+    /// (assignments, calls, returns, branch decisions), each stamped with the
+    /// op-clock value and the call depth.
+    pub fn enable_tracing(&mut self) {
+        self.trace = Some(Vec::new());
+    }
+
+    /// The trace recorded by the last `run`, if tracing is enabled.
+    pub fn trace(&self) -> Option<&[TraceEvent]> {
+        self.trace.as_deref()
+    }
+
+    fn tracing(&self) -> bool {
+        self.trace.is_some()
+    }
+
+    /// Append an event, stamped with the current op-clock and depth.
+    /// Recording never ticks fuel — a trace observes, it does not perturb.
+    fn push_event(&mut self, kind: EventKind) {
+        let event = TraceEvent { op: self.fuel.used, depth: self.depth, kind };
+
+        if let Some(trace) = self.trace.as_mut() {
+            trace.push(event);
+        }
     }
 
     fn eval(&mut self, expr: &Expr) -> Result<Value> {
@@ -328,6 +363,13 @@ impl Interpreter {
             values.push(self.eval(arg)?);
         }
 
+        if self.tracing() {
+            self.push_event(EventKind::Call {
+                name: function_name(function),
+                args: values.clone(),
+            });
+        }
+
         self.depth += 1;
 
         if self.depth > MAX_CALL_DEPTH {
@@ -362,13 +404,22 @@ impl Interpreter {
         self.env.scopes.extend(caller_locals);
         self.depth -= 1;
 
-        match outcome? {
-            Flow::Return(value) => Ok(value),
+        let value = match outcome? {
+            Flow::Return(value) => value,
             // No null in the language: a call must produce a value.
             Flow::Value(_) => {
-                Err(LangError::NoReturnValue { function: function_name(function) })
+                return Err(LangError::NoReturnValue { function: function_name(function) });
             }
+        };
+
+        if self.tracing() {
+            self.push_event(EventKind::Return {
+                name: function_name(function),
+                value: value.clone(),
+            });
         }
+
+        Ok(value)
     }
 
     /// Native functions provided by the host. In the closed-world design
@@ -480,17 +531,34 @@ impl Interpreter {
         match stmt {
             Stmt::Let { name, value } => {
                 let v = self.eval(value)?;
+
+                if self.tracing() {
+                    self.push_event(EventKind::Assign { target: name.clone(), value: v.clone() });
+                }
+
                 self.env.declare(name.clone(), v);
                 Ok(Flow::Value(None))
             }
             Stmt::Assign { name, value } => {
                 let v = self.eval(value)?;
+
+                if self.tracing() {
+                    self.push_event(EventKind::Assign { target: name.clone(), value: v.clone() });
+                }
+
                 self.env.assign(name, v)?;
                 Ok(Flow::Value(None))
             }
             Stmt::IndexAssign { name, index, value } => {
                 let index = self.eval(index)?;
                 let value = self.eval(value)?;
+
+                // Capture the trace data before `value` is moved into the
+                // array, and before the mutable borrow below (which would
+                // conflict with recording). Dropped untouched on any error.
+                let traced = self
+                    .tracing()
+                    .then(|| (format!("{name}[{index}]"), value.clone()));
 
                 // Locate the binding like `=` does, innermost scope first.
                 let slot = self
@@ -513,6 +581,11 @@ impl Interpreter {
                 self.fuel.tick(cost)?;
 
                 Rc::make_mut(items)[i] = value;
+
+                if let Some((target, value)) = traced {
+                    self.push_event(EventKind::Assign { target, value });
+                }
+
                 Ok(Flow::Value(None))
             }
             Stmt::Function(function) => {
@@ -554,8 +627,13 @@ impl Interpreter {
                 Ok(flow)
             }
             Stmt::If { condition, then_branch, else_branch } => {
+                let flag = self.eval_condition(condition)?;
 
-                if self.eval_condition(condition)? {
+                if self.tracing() {
+                    self.push_event(EventKind::Branch { construct: "if", value: flag });
+                }
+
+                if flag {
                     self.exec(then_branch)
                 } else if let Some(else_branch) = else_branch {
                     self.exec(else_branch)
@@ -568,7 +646,16 @@ impl Interpreter {
                 // The condition is re-evaluated (and re-charged) on every
                 // iteration, so even an empty loop burns fuel — that is the
                 // whole safety argument.
-                while self.eval_condition(condition)? {
+                loop {
+                    let flag = self.eval_condition(condition)?;
+
+                    if self.tracing() {
+                        self.push_event(EventKind::Branch { construct: "while", value: flag });
+                    }
+
+                    if !flag {
+                        break;
+                    }
 
                     if let Flow::Return(value) = self.exec(body)? {
                         return Ok(Flow::Return(value));

@@ -1,8 +1,8 @@
 // Shared helpers for the integration tests. Living under `common/` (not
 // `common.rs`) keeps cargo from treating it as its own test binary.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
-pub use playscript::{DEFAULT_FUEL_LIMIT, Interpreter, LangError, Value};
+pub use playscript::{DEFAULT_FUEL_LIMIT, EventKind, Interpreter, LangError, TraceEvent, Value};
 
 /// Run a program with the default budget; return the raw outcome.
 pub fn run(src: &str) -> Result<Option<Value>, LangError> {
@@ -33,6 +33,14 @@ pub fn ops(src: &str) -> u64 {
     let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT);
     interp.run(src).expect("program should succeed");
     interp.fuel_used()
+}
+
+/// Run a program with tracing on and return the recorded events.
+pub fn trace_of(src: &str) -> Vec<TraceEvent> {
+    let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT);
+    interp.enable_tracing();
+    interp.run(src).expect("program should succeed");
+    interp.trace().expect("tracing enabled").to_vec()
 }
 
 pub fn num(n: f64) -> Value {
