@@ -88,16 +88,24 @@ impl fmt::Display for Token {
     }
 }
 
-/// Turn source text into a flat list of tokens.
-pub fn tokenize(src: &str) -> Result<Vec<Token>> {
+/// Turn source text into a flat list of tokens, plus the 1-based source line
+/// each token starts on (parallel to `tokens`), so the parser can tag nodes.
+pub fn tokenize(src: &str) -> Result<(Vec<Token>, Vec<usize>)> {
     let mut tokens = Vec::new();
+    let mut lines = Vec::new();
+    let mut line = 1usize;
     let mut chars = src.chars().peekable();
 
     while let Some(&c) = chars.peek() {
+        let start_line = line;
 
         match c {
-            ' ' | '\t' | '\r' | '\n' => {
+            ' ' | '\t' | '\r' => {
                 chars.next();
+            }
+            '\n' => {
+                chars.next();
+                line += 1;
             }
             '+' => {
                 chars.next();
@@ -247,6 +255,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
                             Some(c) => return Err(LangError::InvalidEscape(c)),
                             None => return Err(LangError::UnterminatedString),
                         },
+                        Some('\n') => {
+                            s.push('\n');
+                            line += 1;
+                        }
                         Some(c) => s.push(c),
                     }
                 }
@@ -302,7 +314,13 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             }
             _ => return Err(LangError::UnexpectedChar(c)),
         }
+
+        // Record the start line for whatever token this iteration produced
+        // (whitespace and comments produce none).
+        if tokens.len() > lines.len() {
+            lines.push(start_line);
+        }
     }
 
-    Ok(tokens)
+    Ok((tokens, lines))
 }

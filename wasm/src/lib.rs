@@ -50,7 +50,7 @@ fn trace_to_json(events: &[TraceEvent]) -> Json {
 }
 
 fn event_to_json(event: &TraceEvent) -> Json {
-    let mut obj = json!({ "op": event.op, "depth": event.depth });
+    let mut obj = json!({ "op": event.op, "depth": event.depth, "line": event.line });
     let map = obj.as_object_mut().expect("json! built an object");
 
     // A flat object with a `kind` discriminant — easy for the UI to switch on.
@@ -135,6 +135,7 @@ mod tests {
         assert_eq!(call["args"][0], 1.0);
         assert!(call["op"].is_number());
         assert!(call["depth"].is_number());
+        assert!(call["line"].is_number());
 
         assert!(trace.iter().any(|e| e["kind"] == "branch"));
         assert!(trace.iter().any(|e| e["kind"] == "return"));

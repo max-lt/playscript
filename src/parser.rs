@@ -32,6 +32,7 @@ use crate::value::Value;
 
 pub struct Parser {
     tokens: Vec<Token>,
+    lines: Vec<usize>,
     pos: usize,
 }
 
@@ -45,8 +46,13 @@ fn expected(what: &'static str, found: Option<Token>) -> LangError {
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+    pub fn new(tokens: Vec<Token>, lines: Vec<usize>) -> Self {
+        Parser { tokens, lines, pos: 0 }
+    }
+
+    /// The 1-based source line of the token about to be consumed.
+    fn line(&self) -> usize {
+        self.lines.get(self.pos).or_else(|| self.lines.last()).copied().unwrap_or(1)
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -99,21 +105,22 @@ impl Parser {
     // Parse an expression; if '=' follows, reinterpret the expression as an
     // assignment target — a variable, or one indexing of a variable.
     fn expr_or_assign_statement(&mut self) -> Result<Stmt> {
+        let line = self.line();
         let expr = self.expr()?;
 
         if !matches!(self.peek(), Some(Token::Equals)) {
-            return Ok(Stmt::Expr(expr));
+            return Ok(Stmt::Expr { expr, line });
         }
 
         self.advance(); // consume '='
         let value = self.expr()?;
 
         match expr {
-            Expr::Variable(name) => Ok(Stmt::Assign { name, value }),
+            Expr::Variable(name) => Ok(Stmt::Assign { name, value, line }),
             Expr::Index { target, index } => {
 
                 if let Expr::Variable(name) = *target {
-                    return Ok(Stmt::IndexAssign { name, index: *index, value });
+                    return Ok(Stmt::IndexAssign { name, index: *index, value, line });
                 }
 
                 Err(LangError::InvalidAssignTarget)
@@ -123,6 +130,7 @@ impl Parser {
     }
 
     fn let_statement(&mut self) -> Result<Stmt> {
+        let line = self.line();
         self.advance(); // consume 'var'
 
         let name = match self.advance() {
@@ -133,7 +141,7 @@ impl Parser {
         self.expect(Token::Equals, "'='")?;
 
         let value = self.expr()?;
-        Ok(Stmt::Let { name, value })
+        Ok(Stmt::Let { name, value, line })
     }
 
     fn block(&mut self) -> Result<Stmt> {
@@ -166,6 +174,7 @@ impl Parser {
     // Braces are mandatory around branches, which rules out the classic
     // "dangling else" ambiguity. `else if` chains by recursing into `if`.
     fn if_statement(&mut self) -> Result<Stmt> {
+        let line = self.line();
         self.advance(); // consume 'if'
 
         self.expect(Token::LParen, "'('")?;
@@ -189,10 +198,11 @@ impl Parser {
             None
         };
 
-        Ok(Stmt::If { condition, then_branch, else_branch })
+        Ok(Stmt::If { condition, then_branch, else_branch, line })
     }
 
     fn while_statement(&mut self) -> Result<Stmt> {
+        let line = self.line();
         self.advance(); // consume 'while'
 
         self.expect(Token::LParen, "'('")?;
@@ -204,7 +214,7 @@ impl Parser {
             _ => return Err(expected("'{'", self.advance())),
         };
 
-        Ok(Stmt::While { condition, body })
+        Ok(Stmt::While { condition, body, line })
     }
 
     fn function_statement(&mut self) -> Result<Stmt> {
@@ -254,11 +264,12 @@ impl Parser {
     }
 
     fn return_statement(&mut self) -> Result<Stmt> {
+        let line = self.line();
         self.advance(); // consume 'return'
 
         // No null in the language: `return` always carries a value.
         let value = self.expr()?;
-        Ok(Stmt::Return(value))
+        Ok(Stmt::Return { value, line })
     }
 
     fn expr(&mut self) -> Result<Expr> {
@@ -318,8 +329,9 @@ impl Parser {
         let body = if matches!(self.peek(), Some(Token::LBrace)) {
             self.block()?
         } else {
+            let line = self.line();
             let value = self.expr()?;
-            Stmt::Block(vec![Stmt::Return(value)])
+            Stmt::Block(vec![Stmt::Return { value, line }])
         };
 
         Ok(Expr::Lambda(Rc::new(Function { name: None, params, body })))

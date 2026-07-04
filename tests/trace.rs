@@ -114,3 +114,31 @@ fn branch_decisions_are_recorded() {
 
     assert_eq!(branches, vec![true, true, false]);
 }
+
+#[test]
+fn events_carry_their_source_line() {
+    let trace = trace_of("var x = 1\nvar y = 2\nx = x + y");
+    let lines: Vec<usize> = trace.iter().map(|e| e.line).collect();
+
+    assert_eq!(lines, vec![1, 2, 3]);
+}
+
+#[test]
+fn call_branch_and_return_lines() {
+    // 1: function f(n) {
+    // 2:   if (n < 1) {
+    // 3:     return 0
+    // 4:   }
+    // 5:   return n
+    // 6: }
+    // 7: f(0)
+    let trace = trace_of("function f(n) {\n  if (n < 1) {\n    return 0\n  }\n  return n\n}\nf(0)");
+
+    let line_of = |pred: fn(&EventKind) -> bool| {
+        trace.iter().find(|e| pred(&e.kind)).map(|e| e.line)
+    };
+
+    assert_eq!(line_of(|k| matches!(k, EventKind::Call { .. })), Some(7));
+    assert_eq!(line_of(|k| matches!(k, EventKind::Branch { .. })), Some(2));
+    assert_eq!(line_of(|k| matches!(k, EventKind::Return { .. })), Some(3));
+}

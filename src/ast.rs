@@ -85,25 +85,27 @@ pub enum Expr {
 
 /// A statement: executed for its effect.
 #[derive(Debug)]
+/// Statements that map to a source line carry it (`line`), so the interpreter
+/// can stamp trace events with the line the visualizer should highlight.
 pub enum Stmt {
     /// `var x = expr` — declare in the current scope.
-    Let { name: String, value: Expr },
+    Let { name: String, value: Expr, line: usize },
     /// `x = expr` — update an existing binding, innermost scope first.
-    Assign { name: String, value: Expr },
+    Assign { name: String, value: Expr, line: usize },
     /// `x[i] = expr` — write one element of an array variable (copy-on-write).
-    IndexAssign { name: String, index: Expr, value: Expr },
+    IndexAssign { name: String, index: Expr, value: Expr, line: usize },
     /// `{ ... }` — runs in its own scope.
     Block(Vec<Stmt>),
     /// Branches are always blocks (or another `If` for `else if`).
-    If { condition: Expr, then_branch: Box<Stmt>, else_branch: Option<Box<Stmt>> },
+    If { condition: Expr, then_branch: Box<Stmt>, else_branch: Option<Box<Stmt>>, line: usize },
     /// `while (cond) { ... }` — the body is always a block.
-    While { condition: Expr, body: Box<Stmt> },
+    While { condition: Expr, body: Box<Stmt>, line: usize },
     /// `function name(params) { ... }` — registers the function.
     /// `Rc` so the definition can outlive the AST it was parsed from.
     Function(Rc<Function>),
     /// `return expr` — unwinds to the nearest enclosing call.
-    Return(Expr),
-    Expr(Expr),
+    Return { value: Expr, line: usize },
+    Expr { expr: Expr, line: usize },
 }
 
 /// A user-defined function. The body is always a block; lambdas have no name.

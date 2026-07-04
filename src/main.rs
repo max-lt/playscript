@@ -48,7 +48,7 @@ fn print_trace(events: &[TraceEvent]) {
 
     for event in events {
         let indent = "  ".repeat(event.depth);
-        println!("op {:>7} │ {indent}{}", event.op, event.kind);
+        println!("op {:>7} │ L{:<3} {indent}{}", event.op, event.line, event.kind);
     }
 
     println!("──");

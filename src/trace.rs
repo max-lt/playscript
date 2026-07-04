@@ -9,6 +9,8 @@ use crate::value::Value;
 pub struct TraceEvent {
     pub op: u64,
     pub depth: usize,
+    /// 1-based source line the event came from — for editor highlighting.
+    pub line: usize,
     pub kind: EventKind,
 }
 

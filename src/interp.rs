@@ -125,6 +125,9 @@ pub struct Interpreter {
     env: Environment,
     fuel: Fuel,
     depth: usize,
+    /// Source line of the statement currently executing; stamped onto trace
+    /// events so the visualizer can highlight the matching line.
+    current_line: usize,
     /// `Some` when tracing is enabled. Recording never ticks fuel, so a
     /// traced run and a plain run produce identical results and op counts.
     trace: Option<Vec<TraceEvent>>,
@@ -136,6 +139,7 @@ impl Interpreter {
             env: Environment::default(),
             fuel: Fuel { used: 0, limit: fuel_limit },
             depth: 0,
+            current_line: 1,
             trace: None,
         }
     }
@@ -144,11 +148,12 @@ impl Interpreter {
     /// The environment and function registry persist across calls (that is
     /// what makes the REPL stateful); the fuel budget resets on every call.
     pub fn run(&mut self, src: &str) -> Result<Option<Value>> {
-        let tokens = tokenize(src)?;
-        let program = Parser::new(tokens).parse_program()?;
+        let (tokens, lines) = tokenize(src)?;
+        let program = Parser::new(tokens, lines).parse_program()?;
 
         self.fuel.used = 0;
         self.depth = 0;
+        self.current_line = 1;
 
         if let Some(trace) = self.trace.as_mut() {
             trace.clear();
@@ -191,7 +196,12 @@ impl Interpreter {
     /// Append an event, stamped with the current op-clock and depth.
     /// Recording never ticks fuel — a trace observes, it does not perturb.
     fn push_event(&mut self, kind: EventKind) {
-        let event = TraceEvent { op: self.fuel.used, depth: self.depth, kind };
+        let event = TraceEvent {
+            op: self.fuel.used,
+            depth: self.depth,
+            line: self.current_line,
+            kind,
+        };
 
         if let Some(trace) = self.trace.as_mut() {
             trace.push(event);
@@ -370,6 +380,9 @@ impl Interpreter {
             });
         }
 
+        // The body moves `current_line` around as it runs; save the caller's
+        // line to restore once the call returns.
+        let caller_line = self.current_line;
         self.depth += 1;
 
         if self.depth > MAX_CALL_DEPTH {
@@ -412,6 +425,8 @@ impl Interpreter {
             }
         };
 
+        // The Return event uses the callee's return line (current_line as the
+        // return statement left it); then restore the caller's line.
         if self.tracing() {
             self.push_event(EventKind::Return {
                 name: function_name(function),
@@ -419,6 +434,7 @@ impl Interpreter {
             });
         }
 
+        self.current_line = caller_line;
         Ok(value)
     }
 
@@ -529,7 +545,8 @@ impl Interpreter {
         self.fuel.tick(1)?;
 
         match stmt {
-            Stmt::Let { name, value } => {
+            Stmt::Let { name, value, line } => {
+                self.current_line = *line;
                 let v = self.eval(value)?;
 
                 if self.tracing() {
@@ -539,7 +556,8 @@ impl Interpreter {
                 self.env.declare(name.clone(), v);
                 Ok(Flow::Value(None))
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, line } => {
+                self.current_line = *line;
                 let v = self.eval(value)?;
 
                 if self.tracing() {
@@ -549,7 +567,8 @@ impl Interpreter {
                 self.env.assign(name, v)?;
                 Ok(Flow::Value(None))
             }
-            Stmt::IndexAssign { name, index, value } => {
+            Stmt::IndexAssign { name, index, value, line } => {
+                self.current_line = *line;
                 let index = self.eval(index)?;
                 let value = self.eval(value)?;
 
@@ -596,9 +615,10 @@ impl Interpreter {
                 self.env.declare(name, value);
                 Ok(Flow::Value(None))
             }
-            Stmt::Return(expr) => {
-                let value = self.eval(expr)?;
-                Ok(Flow::Return(value))
+            Stmt::Return { value, line } => {
+                self.current_line = *line;
+                let result = self.eval(value)?;
+                Ok(Flow::Return(result))
             }
             Stmt::Block(stmts) => {
                 self.env.push_scope();
@@ -626,7 +646,8 @@ impl Interpreter {
                 self.env.pop_scope();
                 Ok(flow)
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { condition, then_branch, else_branch, line } => {
+                self.current_line = *line;
                 let flag = self.eval_condition(condition)?;
 
                 if self.tracing() {
@@ -641,12 +662,13 @@ impl Interpreter {
                     Ok(Flow::Value(None))
                 }
             }
-            Stmt::While { condition, body } => {
+            Stmt::While { condition, body, line } => {
 
                 // The condition is re-evaluated (and re-charged) on every
                 // iteration, so even an empty loop burns fuel — that is the
                 // whole safety argument.
                 loop {
+                    self.current_line = *line;
                     let flag = self.eval_condition(condition)?;
 
                     if self.tracing() {
@@ -664,7 +686,10 @@ impl Interpreter {
 
                 Ok(Flow::Value(None))
             }
-            Stmt::Expr(expr) => Ok(Flow::Value(Some(self.eval(expr)?))),
+            Stmt::Expr { expr, line } => {
+                self.current_line = *line;
+                Ok(Flow::Value(Some(self.eval(expr)?)))
+            }
         }
     }
 

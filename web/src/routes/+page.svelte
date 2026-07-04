@@ -9,13 +9,21 @@
 		'Maybe monad': `function unit(x) { return [x] }\nfunction bind(m, f) {\n  if (len(m) == 0) { return [] }\n  return f(m[0])\n}\nfunction safediv(a, b) {\n  if (b == 0) { return [] }\n  return [a / b]\n}\n\nbind(bind(unit(20), x => safediv(x, 2)), y => safediv(y, 5))`
 	};
 
+	// One source line is 24px tall (leading-6), with 16px top padding (p-4);
+	// the highlight strip and auto-scroll rely on these numbers.
+	const LINE_H = 24;
+	const PAD_TOP = 16;
+
 	let source = $state(EXAMPLES['Fibonacci (recursive)']);
 	let ready = $state(false);
 	let result = $state<RunResult | null>(null);
 	let step = $state(0);
+	let scrollY = $state(0);
 	let traceEl = $state<HTMLElement>();
+	let editorEl = $state<HTMLTextAreaElement>();
 
 	const events = $derived<TraceEvent[]>(result?.trace ?? []);
+	const activeLine = $derived<number | null>(step > 0 ? (events[step - 1]?.line ?? null) : null);
 
 	onMount(async () => {
 		await load();
@@ -41,10 +49,23 @@
 		}
 	}
 
-	// Keep the current event in view as the scrubber moves.
+	// Keep the current trace event in view as the scrubber moves.
 	$effect(() => {
 		step;
 		traceEl?.querySelector('[data-current]')?.scrollIntoView({ block: 'nearest' });
+	});
+
+	// Keep the highlighted source line in view in the editor.
+	$effect(() => {
+		if (activeLine == null || !editorEl) return;
+
+		const top = PAD_TOP + (activeLine - 1) * LINE_H;
+
+		if (top < editorEl.scrollTop) {
+			editorEl.scrollTop = top - LINE_H;
+		} else if (top + LINE_H > editorEl.scrollTop + editorEl.clientHeight) {
+			editorEl.scrollTop = top + LINE_H - editorEl.clientHeight;
+		}
 	});
 
 	function fmtValue(v: JsonValue | null): string {
@@ -105,11 +126,27 @@
 					</button>
 				{/each}
 			</div>
-			<textarea
-				class="min-h-40 flex-1 resize-none bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-100 outline-none"
-				bind:value={source}
-				onkeydown={onKey}
-				spellcheck="false"></textarea>
+
+			<!-- The highlight strip sits behind a transparent textarea, aligned to
+			     the active source line and scrolling with it. -->
+			<div class="relative min-h-40 flex-1 overflow-hidden bg-slate-950">
+				{#if activeLine != null}
+					<div
+						class="pointer-events-none absolute right-0 left-0 bg-indigo-500/15"
+						style="top: {PAD_TOP + (activeLine - 1) * LINE_H - scrollY}px; height: {LINE_H}px"
+					></div>
+				{/if}
+				<textarea
+					bind:this={editorEl}
+					bind:value={source}
+					onkeydown={onKey}
+					onscroll={(e) => (scrollY = e.currentTarget.scrollTop)}
+					wrap="off"
+					spellcheck="false"
+					class="absolute inset-0 resize-none bg-transparent p-4 font-mono text-sm leading-6 text-slate-100 outline-none"
+				></textarea>
+			</div>
+
 			<div class="flex items-center gap-3 border-t border-slate-800 px-4 py-2.5">
 				<button
 					class="rounded bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
@@ -170,9 +207,12 @@
 					<div bind:this={traceEl} class="min-h-0 flex-1 overflow-auto p-2 font-mono text-sm">
 						{#each events as event, i (i)}
 							{@const isCurrent = i === step - 1}
-							<div
+							<button
+								type="button"
 								data-current={isCurrent ? '' : undefined}
-								class="flex items-center gap-3 rounded px-2 py-0.5 {i >= step
+								onclick={() => (step = i + 1)}
+								class="flex w-full items-center gap-3 rounded px-2 py-0.5 text-left hover:bg-slate-800/60 {i >=
+								step
 									? 'opacity-30'
 									: ''} {isCurrent ? 'bg-slate-800' : ''}"
 							>
@@ -181,7 +221,7 @@
 								<span class="text-slate-200" style="padding-left: {event.depth * 1.1}rem">
 									{detail(event)}
 								</span>
-							</div>
+							</button>
 						{/each}
 					</div>
 				{:else}

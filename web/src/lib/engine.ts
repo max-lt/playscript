@@ -8,7 +8,7 @@ import wasmUrl from 'playscript-wasm/playscript_wasm_bg.wasm?url';
 export type JsonValue = number | boolean | string | JsonValue[];
 
 // Mirrors the JSON the bridge emits (see wasm/src/lib.rs).
-export type TraceEvent = { op: number; depth: number } & (
+export type TraceEvent = { op: number; depth: number; line: number } & (
 	| { kind: 'assign'; target: string; value: JsonValue }
 	| { kind: 'call'; name: string; args: JsonValue[] }
 	| { kind: 'return'; name: string; value: JsonValue }
