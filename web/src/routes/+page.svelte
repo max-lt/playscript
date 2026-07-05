@@ -101,20 +101,23 @@
 				return `${e.name} → ${fmtValue(e.value)}`;
 			case 'branch':
 				return `→ ${e.value}`;
+			case 'expr':
+				return `=> ${fmtValue(e.value)}`;
 		}
 	}
 
 	function badge(e: TraceEvent): string {
 		return e.kind === 'branch'
 			? e.construct
-			: { call: 'call', return: 'ret', assign: 'set' }[e.kind];
+			: { call: 'call', return: 'ret', assign: 'set', expr: 'expr' }[e.kind];
 	}
 
 	const kindColor: Record<TraceEvent['kind'], string> = {
 		call: 'text-sky-400',
 		return: 'text-emerald-400',
 		branch: 'text-amber-400',
-		assign: 'text-slate-400'
+		assign: 'text-slate-400',
+		expr: 'text-violet-400'
 	};
 </script>
 

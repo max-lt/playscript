@@ -688,7 +688,13 @@ impl Interpreter {
             }
             Stmt::Expr { expr, line } => {
                 self.current_line = *line;
-                Ok(Flow::Value(Some(self.eval(expr)?)))
+                let value = self.eval(expr)?;
+
+                if self.tracing() {
+                    self.push_event(EventKind::Expr { value: value.clone() });
+                }
+
+                Ok(Flow::Value(Some(value)))
             }
         }
     }

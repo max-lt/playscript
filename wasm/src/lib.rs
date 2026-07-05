@@ -75,6 +75,10 @@ fn event_to_json(event: &TraceEvent) -> Json {
             map.insert("construct".into(), json!(construct));
             map.insert("value".into(), json!(value));
         }
+        EventKind::Expr { value } => {
+            map.insert("kind".into(), json!("expr"));
+            map.insert("value".into(), value_to_json(value));
+        }
     }
 
     obj

@@ -27,6 +27,8 @@ pub enum EventKind {
     Return { name: String, value: Value },
     /// An `if` or `while` condition was evaluated (`construct` is which one).
     Branch { construct: &'static str, value: bool },
+    /// A bare expression statement evaluated to a value.
+    Expr { value: Value },
 }
 
 impl fmt::Display for EventKind {
@@ -50,6 +52,7 @@ impl fmt::Display for EventKind {
             }
             EventKind::Return { name, value } => write!(f, "return {name} → {value}"),
             EventKind::Branch { construct, value } => write!(f, "{construct} → {value}"),
+            EventKind::Expr { value } => write!(f, "=> {value}"),
         }
     }
 }

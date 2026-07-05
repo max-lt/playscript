@@ -124,6 +124,20 @@ fn events_carry_their_source_line() {
 }
 
 #[test]
+fn bare_expressions_are_traced() {
+    let trace = trace_of("var i = 1 + 1\ni + 1");
+
+    assert!(matches!(trace[0].kind, EventKind::Assign { .. }));
+
+    let EventKind::Expr { value } = &trace[1].kind else {
+        panic!("expected an expression event, got {:?}", trace[1].kind);
+    };
+
+    assert_eq!(*value, num(3.0));
+    assert_eq!(trace[1].line, 2);
+}
+
+#[test]
 fn call_branch_and_return_lines() {
     // 1: function f(n) {
     // 2:   if (n < 1) {

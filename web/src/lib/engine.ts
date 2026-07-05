@@ -13,6 +13,7 @@ export type TraceEvent = { op: number; depth: number; line: number } & (
 	| { kind: 'call'; name: string; args: JsonValue[] }
 	| { kind: 'return'; name: string; value: JsonValue }
 	| { kind: 'branch'; construct: string; value: boolean }
+	| { kind: 'expr'; value: JsonValue }
 );
 
 export type RunResult =
