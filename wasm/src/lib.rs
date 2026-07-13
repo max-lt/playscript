@@ -25,6 +25,7 @@ pub fn run_to_json(source: &str) -> String {
 
     let outcome = interp.run(source);
     let ops = interp.fuel_used();
+    let truncated = interp.trace_truncated();
     let trace = trace_to_json(interp.trace().unwrap_or(&[]));
 
     let result = match outcome {
@@ -32,12 +33,14 @@ pub fn run_to_json(source: &str) -> String {
             "ok": true,
             "value": value.as_ref().map(value_to_json),
             "ops": ops,
+            "truncated": truncated,
             "trace": trace,
         }),
         Err(error) => json!({
             "ok": false,
             "error": error.to_string(),
             "ops": ops,
+            "truncated": truncated,
             "trace": trace,
         }),
     };

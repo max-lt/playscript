@@ -17,8 +17,8 @@ export type TraceEvent = { op: number; depth: number; line: number } & (
 );
 
 export type RunResult =
-	| { ok: true; value: JsonValue | null; ops: number; trace: TraceEvent[] }
-	| { ok: false; error: string; ops: number; trace: TraceEvent[] };
+	| { ok: true; value: JsonValue | null; ops: number; truncated: boolean; trace: TraceEvent[] }
+	| { ok: false; error: string; ops: number; truncated: boolean; trace: TraceEvent[] };
 
 let ready: Promise<unknown> | null = null;
 

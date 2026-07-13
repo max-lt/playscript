@@ -16,6 +16,11 @@ const BUILTIN_NAMES: &[&str] =
 /// Default operation budget for one `run`.
 pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
 
+/// Cap on recorded trace events. Fuel bounds compute, but a fuel-exhausting
+/// run can still produce ~100k events; recording stops here so the trace
+/// stays serializable and renderable. Execution continues past the cap.
+const TRACE_LIMIT: usize = 10_000;
+
 /// Entering a function costs more than a plain node: a call sets up a scope,
 /// binds arguments, tears everything down. First entry in the cost table.
 const FUEL_CALL_COST: u64 = 10;
@@ -131,6 +136,8 @@ pub struct Interpreter {
     /// `Some` when tracing is enabled. Recording never ticks fuel, so a
     /// traced run and a plain run produce identical results and op counts.
     trace: Option<Vec<TraceEvent>>,
+    /// Set when recording stopped at `TRACE_LIMIT`.
+    trace_truncated: bool,
 }
 
 impl Interpreter {
@@ -141,6 +148,7 @@ impl Interpreter {
             depth: 0,
             current_line: 1,
             trace: None,
+            trace_truncated: false,
         }
     }
 
@@ -154,6 +162,7 @@ impl Interpreter {
         self.fuel.used = 0;
         self.depth = 0;
         self.current_line = 1;
+        self.trace_truncated = false;
 
         if let Some(trace) = self.trace.as_mut() {
             trace.clear();
@@ -189,6 +198,11 @@ impl Interpreter {
         self.trace.as_deref()
     }
 
+    /// Whether the last run hit `TRACE_LIMIT` and stopped recording events.
+    pub fn trace_truncated(&self) -> bool {
+        self.trace_truncated
+    }
+
     fn tracing(&self) -> bool {
         self.trace.is_some()
     }
@@ -196,16 +210,23 @@ impl Interpreter {
     /// Append an event, stamped with the current op-clock and depth.
     /// Recording never ticks fuel — a trace observes, it does not perturb.
     fn push_event(&mut self, kind: EventKind) {
-        let event = TraceEvent {
+        if !self.tracing() {
+            return;
+        }
+
+        // Stop recording (but not executing) once the trace is full, so the
+        // trace stays bounded even when the program runs to the fuel limit.
+        if self.trace.as_ref().unwrap().len() >= TRACE_LIMIT {
+            self.trace_truncated = true;
+            return;
+        }
+
+        self.trace.as_mut().unwrap().push(TraceEvent {
             op: self.fuel.used,
             depth: self.depth,
             line: self.current_line,
             kind,
-        };
-
-        if let Some(trace) = self.trace.as_mut() {
-            trace.push(event);
-        }
+        });
     }
 
     fn eval(&mut self, expr: &Expr) -> Result<Value> {

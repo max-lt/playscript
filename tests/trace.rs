@@ -124,6 +124,19 @@ fn events_carry_their_source_line() {
 }
 
 #[test]
+fn the_trace_is_capped_and_flags_truncation() {
+    // fib(20) produces ~65k events, well past the trace cap; recording must
+    // stop and the truncation flag must be set (execution still completes).
+    let fib = "function fib(n) { if (n < 2) { return n } return fib(n - 1) + fib(n - 2) } fib(20)";
+    let mut interp = Interpreter::new(DEFAULT_FUEL_LIMIT);
+    interp.enable_tracing();
+    interp.run(fib).unwrap();
+
+    assert!(interp.trace_truncated());
+    assert_eq!(interp.trace().unwrap().len(), 10_000);
+}
+
+#[test]
 fn bare_expressions_are_traced() {
     let trace = trace_of("var i = 1 + 1\ni + 1");
 
