@@ -27,8 +27,9 @@ use crate::value::Value;
 //   unary      := ("-" | "!") unary | postfix
 //   postfix    := primary ("[" expr "]" | "(" args ")")*
 //   primary    := NUMBER | STRING | "true" | "false" | IDENT
-//                | "[" args "]" | "(" expr ")"
+//                | "[" args "]" | "{" entries "}" | "(" expr ")"
 //   args       := (expr ("," expr)*)?
+//   entries    := (expr ":" expr ("," expr ":" expr)*)?
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -97,7 +98,9 @@ impl Parser {
             Some(Token::Return) => self.return_statement(),
             Some(Token::If) => self.if_statement(),
             Some(Token::While) => self.while_statement(),
-            Some(Token::LBrace) => self.block(),
+            // `{` is a block, unless the group holds a top-level `:` — then
+            // it is a map literal used as an expression statement.
+            Some(Token::LBrace) if !self.brace_group_is_map() => self.block(),
             _ => self.expr_or_assign_statement(),
         }
     }
@@ -323,6 +326,33 @@ impl Parser {
         false
     }
 
+    // `self.pos` is at a '{'. A ':' at brace-depth 1 means a map literal;
+    // a block never has a top-level ':' (no labels in the language).
+    fn brace_group_is_map(&self) -> bool {
+        let mut depth = 0usize;
+        let mut i = self.pos;
+
+        while let Some(tok) = self.tokens.get(i) {
+
+            match tok {
+                Token::LBrace => depth += 1,
+                Token::RBrace => {
+                    depth -= 1;
+
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                Token::Colon if depth == 1 => return true,
+                _ => {}
+            }
+
+            i += 1;
+        }
+
+        false
+    }
+
     // The '=>' is already consumed. An expression body is sugar for a block
     // that returns it: `x => x + 1` == `x => { return x + 1 }`.
     fn lambda_body(&mut self, params: Vec<String>) -> Result<Expr> {
@@ -506,6 +536,31 @@ impl Parser {
 
                 self.expect(Token::RBracket, "']'")?;
                 Ok(Expr::Array(items))
+            }
+            // `{` is a block at statement level; reaching it here means we are
+            // in expression position, so it is a map literal.
+            Some(Token::LBrace) => {
+                let mut entries = Vec::new();
+
+                if !matches!(self.peek(), Some(Token::RBrace)) {
+
+                    loop {
+                        let key = self.expr()?;
+                        self.expect(Token::Colon, "':'")?;
+                        let value = self.expr()?;
+                        entries.push((key, value));
+
+                        match self.peek() {
+                            Some(Token::Comma) => {
+                                self.advance();
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+
+                self.expect(Token::RBrace, "'}'")?;
+                Ok(Expr::Map(entries))
             }
             other => Err(expected("a literal, a variable or '('", other)),
         }

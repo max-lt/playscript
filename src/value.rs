@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::ast::Function;
 use crate::error::{LangError, Result};
+use crate::map::PlayMap;
 
 /// A function value: shared code plus the locals it captured — by value —
 /// when it was created. Globals are not captured; they stay live, which is
@@ -28,6 +29,8 @@ pub enum Value {
     /// optimization, `Rc::make_mut` copies at the first shared write.
     /// No aliasing is ever observable, so no cycles can exist.
     Array(Rc<Vec<Value>>),
+    /// Insertion-ordered map, value semantics via copy-on-write (like arrays).
+    Map(Rc<PlayMap>),
     /// First-class user function (immutable, so sharing is invisible).
     Function(Rc<Closure>),
     /// A host builtin referenced as a value, e.g. `var p = print`.
@@ -45,6 +48,7 @@ impl PartialEq for Value {
             (Value::Bool(l), Value::Bool(r)) => l == r,
             (Value::Str(l), Value::Str(r)) => l == r,
             (Value::Array(l), Value::Array(r)) => l == r,
+            (Value::Map(l), Value::Map(r)) => l == r,
             (Value::Function(l), Value::Function(r)) => Rc::ptr_eq(l, r),
             (Value::Builtin(l), Value::Builtin(r)) => l == r,
             _ => false,
@@ -61,7 +65,18 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Str(_) => "string",
             Value::Array(_) => "array",
+            Value::Map(_) => "map",
             Value::Function(_) | Value::Builtin(_) => "function",
+        }
+    }
+
+    /// If this is a map, its entries in insertion order. Lets code outside the
+    /// crate (the wasm bridge) read maps without `PlayMap` being public.
+    pub fn map_entries(&self) -> Option<impl Iterator<Item = (&Value, &Value)>> {
+
+        match self {
+            Value::Map(map) => Some(map.iter()),
+            _ => None,
         }
     }
 }
@@ -86,6 +101,20 @@ impl fmt::Display for Value {
                 }
 
                 write!(f, "]")
+            }
+            Value::Map(map) => {
+                write!(f, "{{")?;
+
+                for (i, (key, value)) in map.iter().enumerate() {
+
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "{key}: {value}")?;
+                }
+
+                write!(f, "}}")
             }
             Value::Function(closure) => {
 

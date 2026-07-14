@@ -99,6 +99,15 @@ fn value_to_json(value: &Value) -> Json {
         Value::Bool(b) => Json::Bool(*b),
         Value::Str(s) => Json::String(s.to_string()),
         Value::Array(items) => Json::Array(items.iter().map(value_to_json).collect()),
+        Value::Map(_) => {
+            let mut obj = serde_json::Map::new();
+
+            for (key, val) in value.map_entries().expect("matched Map") {
+                obj.insert(key.to_string(), value_to_json(val));
+            }
+
+            Json::Object(obj)
+        }
         _ => Json::String(value.to_string()),
     }
 }
@@ -152,5 +161,11 @@ mod tests {
     fn values_serialize_structurally() {
         let out = parse(r#"[1, [2, true], "hi"]"#);
         assert_eq!(out["value"], serde_json::json!([1.0, [2.0, true], "hi"]));
+    }
+
+    #[test]
+    fn maps_serialize_as_json_objects() {
+        let out = parse(r#"{"a": 1, "b": [2, 3]}"#);
+        assert_eq!(out["value"], serde_json::json!({ "a": 1.0, "b": [2.0, 3.0] }));
     }
 }

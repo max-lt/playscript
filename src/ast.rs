@@ -76,6 +76,8 @@ pub enum Expr {
     Lambda(Rc<Function>),
     /// `[a, b, c]` — array literal.
     Array(Vec<Expr>),
+    /// `{ k: v, ... }` — map literal; keys and values are both expressions.
+    Map(Vec<(Expr, Expr)>),
     /// `target[index]` — read access; chains left-to-right (`m[i][j]`).
     Index { target: Box<Expr>, index: Box<Expr> },
     Unary { op: UnaryOp, operand: Box<Expr> },

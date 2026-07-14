@@ -10,6 +10,7 @@ mod ast;
 mod error;
 mod interp;
 mod lexer;
+mod map;
 mod parser;
 mod trace;
 mod value;

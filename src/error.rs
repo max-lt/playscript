@@ -23,6 +23,8 @@ pub enum LangError {
     InvalidIndex(String),
     IndexOutOfBounds { index: usize, len: usize },
     InvalidAssignTarget,
+    InvalidMapKey { got: &'static str },
+    MissingKey(String),
 }
 
 /// Crate-wide result alias: `Result<T>` == `Result<T, LangError>`.
@@ -72,6 +74,10 @@ impl fmt::Display for LangError {
                 write!(f, "index {index} out of bounds (len {len})")
             }
             LangError::InvalidAssignTarget => write!(f, "invalid assignment target"),
+            LangError::InvalidMapKey { got } => {
+                write!(f, "invalid map key: {got} (keys must be number, bool or string)")
+            }
+            LangError::MissingKey(key) => write!(f, "missing key: {key}"),
         }
     }
 }

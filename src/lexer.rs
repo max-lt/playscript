@@ -42,6 +42,7 @@ pub enum Token {
     RBracket,
     Semicolon,
     Comma,
+    Colon,
 }
 
 // Used to build readable error messages, e.g. "expected '=', found '+'".
@@ -84,6 +85,7 @@ impl fmt::Display for Token {
             Token::RBracket => write!(f, "]"),
             Token::Semicolon => write!(f, ";"),
             Token::Comma => write!(f, ","),
+            Token::Colon => write!(f, ":"),
         }
     }
 }
@@ -192,6 +194,10 @@ pub fn tokenize(src: &str) -> Result<(Vec<Token>, Vec<usize>)> {
             ',' => {
                 chars.next();
                 tokens.push(Token::Comma);
+            }
+            ':' => {
+                chars.next();
+                tokens.push(Token::Colon);
             }
             // One- or two-character operators: the second char decides.
             '=' => {

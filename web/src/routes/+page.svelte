@@ -6,7 +6,8 @@
 		'Fibonacci (recursive)': `function fib(n) {\n  if (n < 2) { return n }\n  return fib(n - 1) + fib(n - 2)\n}\n\nfib(6)`,
 		'Sum (loop)': `var sum = 0;\nvar i = 1;\nwhile (i <= 5) {\n  sum = sum + i;\n  i = i + 1\n}\nsum`,
 		'Bubble sort': `var a = [5, 3, 8, 1, 9];\nvar n = len(a);\nvar i = 0;\nwhile (i < n) {\n  var j = 0;\n  while (j < n - 1) {\n    if (a[j] > a[j + 1]) {\n      var t = a[j];\n      a[j] = a[j + 1];\n      a[j + 1] = t\n    }\n    j = j + 1\n  }\n  i = i + 1\n}\na`,
-		'Maybe monad': `function unit(x) { return [x] }\nfunction bind(m, f) {\n  if (len(m) == 0) { return [] }\n  return f(m[0])\n}\nfunction safediv(a, b) {\n  if (b == 0) { return [] }\n  return [a / b]\n}\n\nbind(bind(unit(20), x => safediv(x, 2)), y => safediv(y, 5))`
+		'Maybe monad': `function unit(x) { return [x] }\nfunction bind(m, f) {\n  if (len(m) == 0) { return [] }\n  return f(m[0])\n}\nfunction safediv(a, b) {\n  if (b == 0) { return [] }\n  return [a / b]\n}\n\nbind(bind(unit(20), x => safediv(x, 2)), y => safediv(y, 5))`,
+		'Word count (map)': `var counts = {};\nvar words = ["a", "b", "a", "a", "b"];\nvar i = 0;\n\nwhile (i < len(words)) {\n  var w = words[i];\n\n  if (has(counts, w)) {\n    counts[w] = counts[w] + 1\n  } else {\n    counts[w] = 1\n  }\n\n  i = i + 1\n}\n\ncounts`
 	};
 
 	// One source line is 24px tall (leading-6), with 16px top padding (p-4);
@@ -87,6 +88,16 @@
 		if (typeof v === 'string') return JSON.stringify(v);
 
 		if (Array.isArray(v)) return '[' + v.map(fmtValue).join(', ') + ']';
+
+		if (typeof v === 'object') {
+			return (
+				'{' +
+				Object.entries(v)
+					.map(([k, val]) => `${k}: ${fmtValue(val)}`)
+					.join(', ') +
+				'}'
+			);
+		}
 
 		return String(v);
 	}

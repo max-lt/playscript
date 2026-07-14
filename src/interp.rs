@@ -5,13 +5,16 @@ use std::rc::Rc;
 use crate::ast::{BinaryOp, Expr, Function, LogicalOp, Stmt, UnaryOp};
 use crate::error::{LangError, Result};
 use crate::lexer::tokenize;
+use crate::map::PlayMap;
 use crate::parser::Parser;
 use crate::trace::{EventKind, TraceEvent};
 use crate::value::{Closure, Value};
 
 /// Builtins reachable as plain names (unless shadowed by a user binding).
-const BUILTIN_NAMES: &[&str] =
-    &["print", "getOperations", "getOperationsLimit", "str", "len", "array", "push"];
+const BUILTIN_NAMES: &[&str] = &[
+    "print", "getOperations", "getOperationsLimit", "str", "len", "array", "push", "has", "keys",
+    "remove",
+];
 
 /// Default operation budget for one `run`.
 pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
@@ -276,6 +279,21 @@ impl Interpreter {
 
                 Ok(Value::Array(values.into()))
             }
+            Expr::Map(entries) => {
+                // One op per entry, like array literals.
+                self.fuel.tick(entries.len() as u64)?;
+
+                let mut map = PlayMap::default();
+
+                for (key_expr, value_expr) in entries {
+                    let key = self.eval(key_expr)?;
+                    let value = self.eval(value_expr)?;
+                    check_map_key(&key)?;
+                    map.insert(key, value);
+                }
+
+                Ok(Value::Map(map.into()))
+            }
             Expr::Index { target, index } => {
                 let target = self.eval(target)?;
                 let index = self.eval(index)?;
@@ -284,6 +302,12 @@ impl Interpreter {
                     Value::Array(items) => {
                         let i = as_index(&index, items.len())?;
                         Ok(items[i].clone())
+                    }
+                    Value::Map(map) => {
+                        check_map_key(&index)?;
+                        map.get(&index)
+                            .cloned()
+                            .ok_or_else(|| LangError::MissingKey(index.to_string()))
                     }
                     other => {
                         Err(LangError::InvalidUnaryOp { op: "[]", operand: other.type_name() })
@@ -513,6 +537,7 @@ impl Interpreter {
                     // Unicode scalar count, not bytes: len("héllo") == 5.
                     Value::Str(s) => Ok(Value::Number(s.chars().count() as f64)),
                     Value::Array(items) => Ok(Value::Number(items.len() as f64)),
+                    Value::Map(map) => Ok(Value::Number(map.len() as f64)),
                     other => Err(LangError::InvalidUnaryOp { op: "len", operand: other.type_name() }),
                 }
             }
@@ -557,6 +582,56 @@ impl Interpreter {
                 let mut items = items.as_ref().clone();
                 items.push(item);
                 Ok(Value::Array(items.into()))
+            }
+            "has" => {
+                let [map, key] = args else {
+                    return Err(wrong_arity(name, 2, args.len()));
+                };
+
+                let map = self.eval(map)?;
+                let key = self.eval(key)?;
+                check_map_key(&key)?;
+
+                match map {
+                    Value::Map(map) => Ok(Value::Bool(map.get(&key).is_some())),
+                    other => Err(LangError::InvalidUnaryOp { op: "has", operand: other.type_name() }),
+                }
+            }
+            "keys" => {
+                let [map] = args else {
+                    return Err(wrong_arity(name, 1, args.len()));
+                };
+
+                match self.eval(map)? {
+                    Value::Map(map) => {
+                        // Building the key array costs one op per key.
+                        self.fuel.tick(map.len() as u64)?;
+                        let keys: Vec<Value> = map.iter().map(|(k, _)| k.clone()).collect();
+                        Ok(Value::Array(keys.into()))
+                    }
+                    other => Err(LangError::InvalidUnaryOp { op: "keys", operand: other.type_name() }),
+                }
+            }
+            "remove" => {
+                let [map, key] = args else {
+                    return Err(wrong_arity(name, 2, args.len()));
+                };
+
+                let map = self.eval(map)?;
+                let key = self.eval(key)?;
+                check_map_key(&key)?;
+
+                match map {
+                    Value::Map(map) => {
+                        // Value semantics: remove returns a new map, one op per
+                        // surviving entry.
+                        self.fuel.tick(map.len() as u64)?;
+                        Ok(Value::Map(map.without(&key).into()))
+                    }
+                    other => {
+                        Err(LangError::InvalidUnaryOp { op: "remove", operand: other.type_name() })
+                    }
+                }
             }
             _ => Err(LangError::UndefinedFunction(name.to_string())),
         }
@@ -609,18 +684,25 @@ impl Interpreter {
                     .find_map(|scope| scope.get_mut(name))
                     .ok_or_else(|| LangError::UndefinedVariable(name.clone()))?;
 
-                let Value::Array(items) = slot else {
-                    return Err(LangError::InvalidUnaryOp { op: "[]=", operand: slot.type_name() });
-                };
-
-                let i = as_index(&index, items.len())?;
-
-                // Copy-on-write: writing to a shared array pays for the copy
-                // it triggers; writing to an unshared one is a plain store.
-                let cost = if Rc::strong_count(items) > 1 { items.len() as u64 } else { 1 };
-                self.fuel.tick(cost)?;
-
-                Rc::make_mut(items)[i] = value;
+                // Copy-on-write for both containers: writing to a shared value
+                // pays for the copy it triggers; an unshared one is a plain store.
+                match slot {
+                    Value::Array(items) => {
+                        let i = as_index(&index, items.len())?;
+                        let cost = if Rc::strong_count(items) > 1 { items.len() as u64 } else { 1 };
+                        self.fuel.tick(cost)?;
+                        Rc::make_mut(items)[i] = value;
+                    }
+                    Value::Map(map) => {
+                        check_map_key(&index)?;
+                        let cost = if Rc::strong_count(map) > 1 { map.len() as u64 } else { 1 };
+                        self.fuel.tick(cost)?;
+                        Rc::make_mut(map).insert(index.clone(), value);
+                    }
+                    other => {
+                        return Err(LangError::InvalidUnaryOp { op: "[]=", operand: other.type_name() });
+                    }
+                }
 
                 if let Some((target, value)) = traced {
                     self.push_event(EventKind::Assign { target, value });
@@ -736,6 +818,17 @@ fn wrong_arity(function: &str, expected: usize, got: usize) -> LangError {
 
 fn function_name(function: &Function) -> String {
     function.name.clone().unwrap_or_else(|| "<lambda>".to_string())
+}
+
+/// Map keys must be primitives (number, bool, string) and not NaN, so that
+/// equality and hashing are total and deterministic.
+fn check_map_key(key: &Value) -> Result<()> {
+
+    match key {
+        Value::Number(n) if n.is_nan() => Err(LangError::InvalidMapKey { got: "NaN" }),
+        Value::Number(_) | Value::Bool(_) | Value::Str(_) => Ok(()),
+        other => Err(LangError::InvalidMapKey { got: other.type_name() }),
+    }
 }
 
 /// Validate an evaluated index against an array length: it must be a
